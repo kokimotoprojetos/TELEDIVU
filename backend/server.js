@@ -361,7 +361,7 @@ app.delete('/api/accounts/:phone', async (req, res) => {
   res.json({ success: true, message: `Conta +${phone} desconectada e deletada.` });
 });
 
-// Buscar todos os grupos e canais de uma conta ativa
+// Buscar todos os grupos, canais, chats de conversa e bots de uma conta ativa
 app.get('/api/accounts/:phone/groups', async (req, res) => {
   const { phone } = req.params;
   const client = activeClients.get(cleanPhone(phone));
@@ -372,19 +372,40 @@ app.get('/api/accounts/:phone/groups', async (req, res) => {
   
   try {
     const dialogs = await client.getDialogs({ limit: 150 });
-    const groups = dialogs
-      .filter(d => d.isGroup || d.isChannel)
-      .map(d => ({
+    const groups = dialogs.map(d => {
+      let type = 'chat'; // conversa privada padrão
+      if (d.isUser) {
+        if (d.entity && d.entity.bot) {
+          type = 'bot';
+        } else {
+          type = 'chat';
+        }
+      } else if (d.isGroup) {
+        type = 'group';
+      } else if (d.isChannel) {
+        type = 'channel';
+      }
+      
+      let name = 'Sem Nome';
+      if (d.isUser) {
+        name = `${d.entity?.firstName || ''} ${d.entity?.lastName || ''}`.trim() || 'Conversa Sem Nome';
+      } else {
+        name = d.title || 'Grupo Sem Nome';
+      }
+      
+      return {
         id: d.id.toString(),
-        name: d.title || 'Grupo Sem Nome',
+        name: name,
+        title: name, // Compatibilidade com frontend anterior
         username: d.entity && d.entity.username ? d.entity.username : null,
-        type: d.isChannel && !d.isGroup ? 'channel' : 'group'
-      }));
+        type: type
+      };
+    });
       
     res.json(groups);
   } catch (err) {
-    console.error(`[Groups] Erro ao buscar grupos para +${phone}:`, err.message);
-    res.status(500).json({ error: `Erro ao carregar grupos: ${err.message}` });
+    console.error(`[Groups] Erro ao buscar chats para +${phone}:`, err.message);
+    res.status(500).json({ error: `Erro ao carregar chats: ${err.message}` });
   }
 });
 

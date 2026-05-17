@@ -46,6 +46,12 @@ function App() {
   const [availableGroups, setAvailableGroups] = useState([]);
   const [isLoadingGroups, setIsLoadingGroups] = useState(false);
   const [groupSearch, setGroupSearch] = useState('');
+  const [chatFilters, setChatFilters] = useState({
+    group: true,
+    channel: true,
+    chat: false,
+    bot: false
+  });
 
   const pollIntervalRef = useRef(null);
   const dataPollIntervalRef = useRef(null);
@@ -1089,12 +1095,12 @@ function App() {
                 }}>
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px', flexWrap: 'wrap', gap: '8px' }}>
                     <span style={{ fontSize: '13px', fontWeight: '600', color: 'var(--text-light)' }}>
-                      Grupos e Canais Detectados ({availableGroups.length})
+                      Contatos e Chats Detectados ({availableGroups.filter(g => chatFilters[g.type]).length})
                     </span>
                     {availableGroups.length > 0 && (
                       <input 
                         type="text" 
-                        placeholder="Buscar grupo..." 
+                        placeholder="Buscar chat..." 
                         value={groupSearch} 
                         onChange={e => setGroupSearch(e.target.value)}
                         style={{
@@ -1111,18 +1117,57 @@ function App() {
                     )}
                   </div>
 
+                  {/* Filtros de Tipos de Chat */}
+                  {availableGroups.length > 0 && (
+                    <div style={{ display: 'flex', gap: '6px', marginBottom: '10px', flexWrap: 'wrap' }}>
+                      {[
+                        { key: 'group', label: 'Grupos', icon: 'groups', color: 'var(--color-emerald)' },
+                        { key: 'channel', label: 'Canais', icon: 'campaign', color: 'var(--color-cyan)' },
+                        { key: 'chat', label: 'Conversas', icon: 'chat', color: 'var(--color-indigo)' },
+                        { key: 'bot', label: 'Bots', icon: 'smart_toy', color: '#fcd34d' }
+                      ].map(filter => {
+                        const isActive = chatFilters[filter.key];
+                        return (
+                          <div
+                            key={filter.key}
+                            onClick={() => setChatFilters({ ...chatFilters, [filter.key]: !isActive })}
+                            style={{
+                              display: 'flex',
+                              alignItems: 'center',
+                              gap: '4px',
+                              padding: '4px 10px',
+                              borderRadius: '20px',
+                              fontSize: '11px',
+                              fontWeight: '600',
+                              cursor: 'pointer',
+                              border: `1px solid ${isActive ? filter.color : 'var(--glass-border)'}`,
+                              background: isActive ? `rgba(${filter.key === 'bot' ? '252,211,77' : filter.key === 'group' ? '16,185,129' : filter.key === 'channel' ? '6,182,212' : '99,102,241'}, 0.15)` : 'transparent',
+                              color: isActive ? '#fff' : 'var(--text-secondary)',
+                              transition: 'all 0.2s'
+                            }}
+                          >
+                            <span className="material-icons-round" style={{ fontSize: '12px', color: isActive ? filter.color : 'var(--text-muted)' }}>
+                              {filter.icon}
+                            </span>
+                            {filter.label}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+
                   {isLoadingGroups ? (
                     <div style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '10px 0', color: 'var(--color-cyan)', fontSize: '12px' }}>
                       <span className="material-icons-round spinning" style={{ fontSize: '18px' }}>sync</span>
-                      Buscando chats e grupos das contas selecionadas...
+                      Buscando chats e contatos das contas selecionadas...
                     </div>
                   ) : campaignForm.accounts.length === 0 ? (
                     <span style={{ fontSize: '12px', color: 'var(--text-muted)', fontStyle: 'italic' }}>
-                      Selecione uma ou mais contas de envio acima para listar seus grupos.
+                      Selecione uma ou mais contas de envio acima para listar seus chats.
                     </span>
                   ) : availableGroups.length === 0 ? (
                     <span style={{ fontSize: '12px', color: 'var(--text-muted)', fontStyle: 'italic' }}>
-                      Nenhum grupo ou canal encontrado nas contas selecionadas.
+                      Nenhum chat ou contato encontrado nas contas selecionadas.
                     </span>
                   ) : (
                     <div style={{
@@ -1135,6 +1180,10 @@ function App() {
                     }} className="custom-scrollbar">
                       {availableGroups
                         .filter(g => {
+                          // Filtra pelo tipo selecionado
+                          if (!chatFilters[g.type]) return false;
+                          
+                          // Filtra pelo termo de busca
                           if (!groupSearch) return true;
                           const term = groupSearch.toLowerCase();
                           return g.title.toLowerCase().includes(term) || (g.username && g.username.toLowerCase().includes(term));
@@ -1168,10 +1217,10 @@ function App() {
                                 className="material-icons-round" 
                                 style={{ 
                                   fontSize: '16px', 
-                                  color: isSelected ? 'var(--color-indigo)' : (g.type === 'channel' ? 'var(--color-cyan)' : 'var(--color-emerald)') 
+                                  color: isSelected ? 'var(--color-indigo)' : (g.type === 'channel' ? 'var(--color-cyan)' : g.type === 'bot' ? '#fcd34d' : g.type === 'chat' ? 'var(--color-indigo)' : 'var(--color-emerald)') 
                                 }}
                               >
-                                {isSelected ? 'check_circle' : (g.type === 'channel' ? 'campaign' : 'groups')}
+                                {isSelected ? 'check_circle' : (g.type === 'channel' ? 'campaign' : g.type === 'bot' ? 'smart_toy' : g.type === 'chat' ? 'chat' : 'groups')}
                               </span>
                               <div style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1 }}>
                                 <div style={{ fontSize: '11px', fontWeight: '500', color: isSelected ? '#fff' : 'var(--text-light)', overflow: 'hidden', textOverflow: 'ellipsis' }}>

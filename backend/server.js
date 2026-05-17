@@ -643,7 +643,13 @@ app.post('/api/logs/clear', async (req, res) => {
 
 // Servir frontend React em produção (fallback para SPA React Router)
 app.get('*', (req, res) => {
-  res.sendFile(path.join(__dirname, '../frontend/dist/index.html'));
+  const indexHtml = path.join(__dirname, '../frontend/dist/index.html');
+  const fs = require('fs');
+  if (fs.existsSync(indexHtml)) {
+    res.sendFile(indexHtml);
+  } else {
+    res.json({ status: 'online', message: 'DIVUGA Telegram API Server' });
+  }
 });
 
 // -------------------------------------------------------------

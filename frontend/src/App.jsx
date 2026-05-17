@@ -99,6 +99,7 @@ function App() {
 
   // Buscar grupos e canais das contas selecionadas para a campanha
   const fetchGroupsForAccounts = async (selectedPhones) => {
+    console.log('[TELEDIVU] Contas selecionadas na campanha para listar grupos:', selectedPhones);
     if (!selectedPhones || selectedPhones.length === 0) {
       setAvailableGroups([]);
       return;
@@ -111,9 +112,14 @@ function App() {
       
       for (const phone of selectedPhones) {
         try {
-          const res = await fetch(`${API_BASE}/accounts/${phone}/groups`);
+          const url = `${API_BASE}/accounts/${phone}/groups`;
+          console.log(`[TELEDIVU] Fazendo requisição para obter grupos da conta +${phone} na URL: ${url}`);
+          const res = await fetch(url);
+          console.log(`[TELEDIVU] Resposta da API para +${phone} - Status: ${res.status}`);
+          
           if (res.ok) {
             const data = await res.json();
+            console.log(`[TELEDIVU] Grupos retornados para +${phone}:`, data.length, data);
             data.forEach(g => {
               const uniqueKey = g.username ? `@${g.username}` : g.id;
               if (!seenGroupIds.has(uniqueKey)) {
@@ -121,9 +127,12 @@ function App() {
                 fetchedGroups.push(g);
               }
             });
+          } else {
+            const errData = await res.json().catch(() => ({}));
+            console.error(`[TELEDIVU] Erro ao buscar grupos para +${phone}:`, errData);
           }
         } catch (err) {
-          console.error(`Erro ao buscar grupos para +${phone}:`, err);
+          console.error(`[TELEDIVU] Falha de conexão ao buscar grupos para +${phone}:`, err);
         }
       }
       setAvailableGroups(fetchedGroups);

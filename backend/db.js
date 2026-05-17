@@ -84,13 +84,19 @@ const db = {
   // Configurações
   getSettings: async () => {
     const data = await load();
-    return data.settings;
+    return {
+      defaultApiId: process.env.TELEGRAM_API_ID || data.settings.defaultApiId,
+      defaultApiHash: process.env.TELEGRAM_API_HASH || data.settings.defaultApiHash
+    };
   },
   saveSettings: async (settings) => {
     const data = await load();
     data.settings = { ...data.settings, ...settings };
     await save();
-    return data.settings;
+    return {
+      defaultApiId: process.env.TELEGRAM_API_ID || data.settings.defaultApiId,
+      defaultApiHash: process.env.TELEGRAM_API_HASH || data.settings.defaultApiHash
+    };
   },
 
   // Contas

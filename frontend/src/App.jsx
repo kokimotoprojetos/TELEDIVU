@@ -662,7 +662,7 @@ function App() {
                   </div>
                   {cmp.status === 'active' && cmp.nextSendAt && (
                     <div className="campaign-stat-item" style={{ marginLeft: 'auto' }}>
-                      <span className="campaign-stat-label">Próximo envio em</span>
+                      <span className="campaign-stat-label">Próximo envio às</span>
                       <span className="campaign-stat-val" style={{ color: 'var(--color-indigo)', fontSize: '15px' }}>
                         {new Date(cmp.nextSendAt).toLocaleTimeString()}
                       </span>

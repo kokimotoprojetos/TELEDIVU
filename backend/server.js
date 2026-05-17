@@ -138,18 +138,40 @@ async function runScheduler() {
       
       // Se já percorremos todos os alvos
       if (currentIdx >= targets.length) {
-        cmp.status = 'completed';
-        cmp.nextSendAt = null;
-        await db.saveCampaign(cmp);
-        await db.addLog({
-          campaignId: cmp.id,
-          campaignName: cmp.name,
-          accountPhone: 'Sistema',
-          target: 'Todos',
-          status: 'success',
-          error: 'Campanha finalizada. Todos os alvos foram contatados!'
-        });
-        continue;
+        if (cmp.loop) {
+          cmp.currentTargetIndex = 0;
+          
+          // Calcula o delay para reiniciar a campanha
+          const baseDelayMin = Number(cmp.delay || 1);
+          const randomDelayMin = Number(cmp.randomDelay || 0);
+          const actualDelayMin = baseDelayMin + (Math.random() * randomDelayMin);
+          const finalDelay = Math.max(10000, actualDelayMin * 60 * 1000); // mínimo de 10s de segurança
+          
+          cmp.nextSendAt = new Date(Date.now() + finalDelay).toISOString();
+          await db.saveCampaign(cmp);
+          await db.addLog({
+            campaignId: cmp.id,
+            campaignName: cmp.name,
+            accountPhone: 'Sistema',
+            target: 'Sistema',
+            status: 'success',
+            error: 'Todos os alvos contatados. Opção LOOP ativa: reiniciando fila de envios a partir do primeiro alvo.'
+          });
+          continue;
+        } else {
+          cmp.status = 'completed';
+          cmp.nextSendAt = null;
+          await db.saveCampaign(cmp);
+          await db.addLog({
+            campaignId: cmp.id,
+            campaignName: cmp.name,
+            accountPhone: 'Sistema',
+            target: 'Todos',
+            status: 'success',
+            error: 'Campanha finalizada. Todos os alvos foram contatados!'
+          });
+          continue;
+        }
       }
       
       const target = targets[currentIdx];
@@ -601,7 +623,7 @@ app.get('/api/campaigns', async (req, res) => {
 });
 
 app.post('/api/campaigns', async (req, res) => {
-  const { id, name, accounts, targetsText, message, delay, randomDelay } = req.body;
+  const { id, name, accounts, targetsText, message, delay, randomDelay, loop } = req.body;
   
   // Converte a caixa de texto de alvos em um array limpo
   const targets = targetsText
@@ -618,6 +640,7 @@ app.post('/api/campaigns', async (req, res) => {
     message: message || '',
     delay: Number(delay) || 60,
     randomDelay: Number(randomDelay) || 10,
+    loop: !!loop, // Garante que seja booleano
     status: id ? (await db.getCampaignById(id))?.status || 'paused' : 'paused',
     sentCount: id ? (await db.getCampaignById(id))?.sentCount || 0 : 0,
     failedCount: id ? (await db.getCampaignById(id))?.failedCount || 0 : 0,

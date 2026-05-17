@@ -39,7 +39,8 @@ function App() {
     targetsText: '',
     message: '',
     delay: 60,
-    randomDelay: 10
+    randomDelay: 10,
+    loop: false
   });
 
   const [availableGroups, setAvailableGroups] = useState([]);
@@ -295,7 +296,8 @@ function App() {
         targetsText: campaign.targetsText || campaign.targets.join('\n'),
         message: campaign.message,
         delay: campaign.delay,
-        randomDelay: campaign.randomDelay
+        randomDelay: campaign.randomDelay,
+        loop: campaign.loop || false
       });
     } else {
       setEditingCampaign(null);
@@ -305,7 +307,8 @@ function App() {
         targetsText: '',
         message: '',
         delay: 60,
-        randomDelay: 10
+        randomDelay: 10,
+        loop: false
       });
     }
     setIsCampaignModalOpen(true);
@@ -473,7 +476,12 @@ function App() {
                 return (
                   <div key={cmp.id} style={{ background: 'rgba(255,255,255,0.01)', border: '1px solid var(--glass-border)', padding: '16px', borderRadius: 'var(--radius-md)' }}>
                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
-                      <strong>{cmp.name}</strong>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                        <strong>{cmp.name}</strong>
+                        {cmp.loop && (
+                          <span className="material-icons-round" style={{ fontSize: '14px', color: 'var(--color-indigo)' }} title="Campanha em Loop Infinito">sync</span>
+                        )}
+                      </div>
                       <span className={`campaign-status-pill ${cmp.status}`}>{cmp.status === 'active' ? 'Ativa' : cmp.status === 'paused' ? 'Pausada' : 'Completa'}</span>
                     </div>
                     <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '12px', color: 'var(--text-secondary)' }}>
@@ -609,7 +617,15 @@ function App() {
               <div key={cmp.id} className="campaign-card">
                 <div className="campaign-header">
                   <div className="campaign-title">
-                    <h3>{cmp.name}</h3>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                      <h3>{cmp.name}</h3>
+                      {cmp.loop && (
+                        <span style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', background: 'rgba(99,102,241,0.15)', color: 'var(--color-indigo)', padding: '2px 8px', borderRadius: '4px', fontSize: '11px', fontWeight: 'bold' }}>
+                          <span className="material-icons-round" style={{ fontSize: '12px' }}>sync</span>
+                          Loop Infinito
+                        </span>
+                      )}
+                    </div>
                     <div className="campaign-meta">
                       <span>Criado em: {new Date(cmp.createdAt).toLocaleDateString()}</span>
                       <span>Contas associadas: {cmp.accounts.length}</span>
@@ -1212,6 +1228,32 @@ function App() {
                   <input className="form-input" type="number" min="0" value={campaignForm.randomDelay} onChange={e => setCampaignForm({ ...campaignForm, randomDelay: e.target.value })} required />
                   <span className="form-hint">Adiciona um tempo aleatório ao intervalo base. Ex: 30 min + Variação de 30 min fará o disparo ocorrer aleatoriamente entre 30 e 60 minutos.</span>
                 </div>
+              </div>
+
+              {/* Loop Opção */}
+              <div className="form-group" style={{ marginTop: '20px', background: 'rgba(99,102,241,0.04)', border: '1px dashed rgba(99,102,241,0.2)', padding: '12px', borderRadius: '8px' }}>
+                <label style={{ display: 'flex', alignItems: 'flex-start', gap: '10px', cursor: 'pointer', userSelect: 'none', margin: 0 }}>
+                  <input 
+                    type="checkbox" 
+                    checked={campaignForm.loop} 
+                    onChange={e => setCampaignForm({ ...campaignForm, loop: e.target.checked })}
+                    style={{
+                      width: '18px',
+                      height: '18px',
+                      accentColor: 'var(--color-indigo)',
+                      cursor: 'pointer',
+                      marginTop: '2px'
+                    }}
+                  />
+                  <div>
+                    <span style={{ fontSize: '13px', fontWeight: '600', color: 'var(--text-light)', display: 'block' }}>
+                      Repetir Campanha em Loop (Envio Infinito)
+                    </span>
+                    <span style={{ fontSize: '11px', color: 'var(--text-muted)', lineHeight: '1.4', display: 'block', marginTop: '2px' }}>
+                      Ao enviar para todos os alvos cadastrados, a campanha reiniciará automaticamente do primeiro alvo da lista e continuará indefinidamente até ser pausada manualmente.
+                    </span>
+                  </div>
+                </label>
               </div>
 
               <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '12px', marginTop: '24px' }}>

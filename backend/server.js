@@ -205,10 +205,11 @@ async function runScheduler() {
         cmp.sentCount = (cmp.sentCount || 0) + 1;
         cmp.currentTargetIndex = currentIdx + 1;
         
-        // Calcula próximo envio com delay + variação humana
-        const delayMs = (cmp.delay || 60) * 1000;
-        const randomMs = ((cmp.randomDelay || 10) * Math.random() * 2000) - ((cmp.randomDelay || 10) * 1000);
-        const finalDelay = Math.max(10000, delayMs + randomMs); // mínimo de 10s de segurança
+        // Calcula próximo envio com delay + variação humana em MINUTOS
+        const baseDelayMin = Number(cmp.delay || 1);
+        const randomDelayMin = Number(cmp.randomDelay || 0);
+        const actualDelayMin = baseDelayMin + (Math.random() * randomDelayMin);
+        const finalDelay = Math.max(10000, actualDelayMin * 60 * 1000); // mínimo de 10s de segurança
         
         cmp.nextSendAt = new Date(Date.now() + finalDelay).toISOString();
         await db.saveCampaign(cmp);
@@ -251,7 +252,7 @@ async function runScheduler() {
           // Avança para o próximo alvo para não travar a campanha inteira!
           cmp.currentTargetIndex = currentIdx + 1;
           
-          const delayMs = (cmp.delay || 60) * 1000;
+          const delayMs = (cmp.delay || 1) * 60 * 1000;
           cmp.nextSendAt = new Date(Date.now() + delayMs).toISOString();
           await db.saveCampaign(cmp);
           

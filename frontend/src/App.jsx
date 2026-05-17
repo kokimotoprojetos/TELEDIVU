@@ -1198,15 +1198,15 @@ function App() {
               {/* Configurações de Delays */}
               <div className="settings-grid" style={{ marginTop: '10px' }}>
                 <div className="form-group">
-                  <label className="form-label">Intervalo entre disparos (segundos)</label>
-                  <input className="form-input" type="number" min="10" value={campaignForm.delay} onChange={e => setCampaignForm({ ...campaignForm, delay: e.target.value })} required />
-                  <span className="form-hint">Mínimo sugerido de 30-60 segundos para evitar punições do Telegram.</span>
+                  <label className="form-label">Intervalo entre disparos (minutos)</label>
+                  <input className="form-input" type="number" min="1" value={campaignForm.delay} onChange={e => setCampaignForm({ ...campaignForm, delay: e.target.value })} required />
+                  <span className="form-hint">Mínimo de 1 minuto. O sistema aguardará este tempo antes de disparar para o próximo grupo.</span>
                 </div>
 
                 <div className="form-group">
-                  <label className="form-label">Variação Humana Aleatória (segundos)</label>
+                  <label className="form-label">Variação Humana Aleatória (minutos)</label>
                   <input className="form-input" type="number" min="0" value={campaignForm.randomDelay} onChange={e => setCampaignForm({ ...campaignForm, randomDelay: e.target.value })} required />
-                  <span className="form-hint">Será somado ou subtraído um tempo aleatório para parecer digitação humana.</span>
+                  <span className="form-hint">Adiciona um tempo aleatório ao intervalo base. Ex: 30 min + Variação de 30 min fará o disparo ocorrer aleatoriamente entre 30 e 60 minutos.</span>
                 </div>
               </div>
 

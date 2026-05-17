@@ -333,6 +333,33 @@ app.delete('/api/accounts/:phone', async (req, res) => {
   res.json({ success: true, message: `Conta +${phone} desconectada e deletada.` });
 });
 
+// Buscar todos os grupos e canais de uma conta ativa
+app.get('/api/accounts/:phone/groups', async (req, res) => {
+  const { phone } = req.params;
+  const client = activeClients.get(phone);
+  
+  if (!client) {
+    return res.status(400).json({ error: 'Esta conta do Telegram não está conectada ou ativa no momento.' });
+  }
+  
+  try {
+    const dialogs = await client.getDialogs({});
+    const groups = dialogs
+      .filter(d => d.isGroup || d.isChannel)
+      .map(d => ({
+        id: d.id.toString(),
+        name: d.title || 'Grupo Sem Nome',
+        username: d.entity && d.entity.username ? d.entity.username : null,
+        type: d.isChannel && !d.isGroup ? 'channel' : 'group'
+      }));
+      
+    res.json(groups);
+  } catch (err) {
+    console.error(`[Groups] Erro ao buscar grupos para +${phone}:`, err.message);
+    res.status(500).json({ error: `Erro ao carregar grupos: ${err.message}` });
+  }
+});
+
 // -------------------------------------------------------------
 // FLUXO DE LOGIN ASSÍNCRONO POR NÚMERO (SMS)
 // -------------------------------------------------------------

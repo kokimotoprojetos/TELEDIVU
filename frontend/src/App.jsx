@@ -42,6 +42,10 @@ function App() {
     randomDelay: 10
   });
 
+  const [availableGroups, setAvailableGroups] = useState([]);
+  const [isLoadingGroups, setIsLoadingGroups] = useState(false);
+  const [groupSearch, setGroupSearch] = useState('');
+
   const pollIntervalRef = useRef(null);
   const dataPollIntervalRef = useRef(null);
 
@@ -92,6 +96,68 @@ function App() {
       if (pollIntervalRef.current) clearInterval(pollIntervalRef.current);
     };
   }, []);
+
+  // Buscar grupos e canais das contas selecionadas para a campanha
+  const fetchGroupsForAccounts = async (selectedPhones) => {
+    if (!selectedPhones || selectedPhones.length === 0) {
+      setAvailableGroups([]);
+      return;
+    }
+    
+    setIsLoadingGroups(true);
+    try {
+      const fetchedGroups = [];
+      const seenGroupIds = new Set();
+      
+      for (const phone of selectedPhones) {
+        try {
+          const res = await fetch(`${API_BASE}/accounts/${phone}/groups`);
+          if (res.ok) {
+            const data = await res.json();
+            data.forEach(g => {
+              const uniqueKey = g.username ? `@${g.username}` : g.id;
+              if (!seenGroupIds.has(uniqueKey)) {
+                seenGroupIds.add(uniqueKey);
+                fetchedGroups.push(g);
+              }
+            });
+          }
+        } catch (err) {
+          console.error(`Erro ao buscar grupos para +${phone}:`, err);
+        }
+      }
+      setAvailableGroups(fetchedGroups);
+    } catch (err) {
+      console.error('Erro ao processar busca de grupos:', err);
+    } finally {
+      setIsLoadingGroups(false);
+    }
+  };
+
+  // Alterna a seleção de um grupo no textarea de alvos
+  const handleGroupClick = (group) => {
+    const targetValue = group.username ? `@${group.username}` : group.id;
+    const currentTargets = campaignForm.targetsText
+      .split('\n')
+      .map(t => t.trim())
+      .filter(t => t.length > 0);
+      
+    if (currentTargets.includes(targetValue)) {
+      const updated = currentTargets.filter(t => t !== targetValue).join('\n');
+      setCampaignForm({ ...campaignForm, targetsText: updated });
+    } else {
+      const updated = [...currentTargets, targetValue].join('\n');
+      setCampaignForm({ ...campaignForm, targetsText: updated });
+    }
+  };
+
+  useEffect(() => {
+    if (isCampaignModalOpen) {
+      fetchGroupsForAccounts(campaignForm.accounts);
+    } else {
+      setAvailableGroups([]);
+    }
+  }, [campaignForm.accounts, isCampaignModalOpen]);
 
   // -------------------------------------------------------------
   // FLUXO DE CONEXÃO E AUTENTICAÇÃO (TELEGRAM)
@@ -239,6 +305,7 @@ function App() {
   const closeCampaignModal = () => {
     setIsCampaignModalOpen(false);
     setEditingCampaign(null);
+    setGroupSearch('');
   };
 
   const handleCampaignAccountToggle = (phone) => {
@@ -982,7 +1049,119 @@ function App() {
               <div className="form-group">
                 <label className="form-label">Grupos ou Usuários de Destino (Um por linha)</label>
                 <textarea className="form-textarea" placeholder="Ex:&#10;@grupo_marketing&#10;@usuario_contato&#10;@meu_canal_vendas" value={campaignForm.targetsText} onChange={e => setCampaignForm({ ...campaignForm, targetsText: e.target.value })} required></textarea>
-                <span className="form-hint">Paste os usernames (com @) ou links/IDs dos alvos. O sistema disparará rotacionando as contas conectadas.</span>
+                
+                {/* Seleção Interativa de Grupos das Contas Conectadas */}
+                <div style={{
+                  marginTop: '10px',
+                  background: 'rgba(255, 255, 255, 0.02)',
+                  border: '1px solid var(--glass-border)',
+                  borderRadius: '8px',
+                  padding: '12px'
+                }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px', flexWrap: 'wrap', gap: '8px' }}>
+                    <span style={{ fontSize: '13px', fontWeight: '600', color: 'var(--text-light)' }}>
+                      Grupos e Canais Detectados ({availableGroups.length})
+                    </span>
+                    {availableGroups.length > 0 && (
+                      <input 
+                        type="text" 
+                        placeholder="Buscar grupo..." 
+                        value={groupSearch} 
+                        onChange={e => setGroupSearch(e.target.value)}
+                        style={{
+                          background: 'rgba(0,0,0,0.2)',
+                          border: '1px solid var(--glass-border)',
+                          borderRadius: '4px',
+                          color: '#fff',
+                          fontSize: '11px',
+                          padding: '3px 8px',
+                          outline: 'none',
+                          width: '120px'
+                        }}
+                      />
+                    )}
+                  </div>
+
+                  {isLoadingGroups ? (
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '10px 0', color: 'var(--color-cyan)', fontSize: '12px' }}>
+                      <span className="material-icons-round spinning" style={{ fontSize: '18px' }}>sync</span>
+                      Buscando chats e grupos das contas selecionadas...
+                    </div>
+                  ) : campaignForm.accounts.length === 0 ? (
+                    <span style={{ fontSize: '12px', color: 'var(--text-muted)', fontStyle: 'italic' }}>
+                      Selecione uma ou mais contas de envio acima para listar seus grupos.
+                    </span>
+                  ) : availableGroups.length === 0 ? (
+                    <span style={{ fontSize: '12px', color: 'var(--text-muted)', fontStyle: 'italic' }}>
+                      Nenhum grupo ou canal encontrado nas contas selecionadas.
+                    </span>
+                  ) : (
+                    <div style={{
+                      maxHeight: '130px',
+                      overflowY: 'auto',
+                      display: 'grid',
+                      gridTemplateColumns: 'repeat(auto-fill, minmax(180px, 1fr))',
+                      gap: '6px',
+                      paddingRight: '4px'
+                    }} className="custom-scrollbar">
+                      {availableGroups
+                        .filter(g => {
+                          if (!groupSearch) return true;
+                          const term = groupSearch.toLowerCase();
+                          return g.title.toLowerCase().includes(term) || (g.username && g.username.toLowerCase().includes(term));
+                        })
+                        .map(g => {
+                          const value = g.username ? `@${g.username}` : g.id;
+                          const isSelected = campaignForm.targetsText
+                            .split('\n')
+                            .map(t => t.trim())
+                            .includes(value);
+
+                          return (
+                            <div
+                              key={g.id}
+                              onClick={() => handleGroupClick(g)}
+                              style={{
+                                display: 'flex',
+                                alignItems: 'center',
+                                gap: '6px',
+                                padding: '6px 8px',
+                                background: isSelected ? 'rgba(99, 102, 241, 0.15)' : 'rgba(255, 255, 255, 0.03)',
+                                border: `1px solid ${isSelected ? 'var(--color-indigo)' : 'var(--glass-border)'}`,
+                                borderRadius: '6px',
+                                cursor: 'pointer',
+                                transition: 'all 0.2s',
+                                userSelect: 'none'
+                              }}
+                              className="group-pill"
+                            >
+                              <span 
+                                className="material-icons-round" 
+                                style={{ 
+                                  fontSize: '16px', 
+                                  color: isSelected ? 'var(--color-indigo)' : (g.type === 'channel' ? 'var(--color-cyan)' : 'var(--color-emerald)') 
+                                }}
+                              >
+                                {isSelected ? 'check_circle' : (g.type === 'channel' ? 'campaign' : 'groups')}
+                              </span>
+                              <div style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1 }}>
+                                <div style={{ fontSize: '11px', fontWeight: '500', color: isSelected ? '#fff' : 'var(--text-light)', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                                  {g.title}
+                                </div>
+                                <div style={{ fontSize: '9px', color: 'var(--text-muted)' }}>
+                                  {g.username ? `@${g.username}` : g.id}
+                                </div>
+                              </div>
+                            </div>
+                          );
+                        })}
+                    </div>
+                  )}
+                </div>
+
+                <span className="form-hint" style={{ marginTop: '6px', display: 'block' }}>
+                  Digite os usernames/IDs manualmente (um por linha) ou clique nos grupos acima para adicioná-los/removê-los da lista.
+                </span>
               </div>
 
               {/* Conteúdo da Mensagem */}

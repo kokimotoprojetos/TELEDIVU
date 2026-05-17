@@ -653,8 +653,12 @@ function App() {
                     <span className="campaign-stat-val" style={{ color: 'var(--color-rose)' }}>{cmp.failedCount}</span>
                   </div>
                   <div className="campaign-stat-item">
-                    <span className="campaign-stat-label">Delay Padrão</span>
-                    <span className="campaign-stat-val">{cmp.delay}s (±{cmp.randomDelay}s)</span>
+                    <span className="campaign-stat-label">Intervalo</span>
+                    <span className="campaign-stat-val">
+                      {Number(cmp.randomDelay) > 0 
+                        ? `${cmp.delay}m a ${Number(cmp.delay) + Number(cmp.randomDelay)}m` 
+                        : `${cmp.delay}m`}
+                    </span>
                   </div>
                   {cmp.status === 'active' && cmp.nextSendAt && (
                     <div className="campaign-stat-item" style={{ marginLeft: 'auto' }}>

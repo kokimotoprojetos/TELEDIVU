@@ -21,6 +21,9 @@ app.use(express.static(path.join(__dirname, '../frontend/dist')));
 const activeClients = new Map(); // phone -> TelegramClient
 const pendingConnections = new Map(); // sessionId -> PendingConnection
 
+// Helper para normalizar telefones em formato numérico puro
+const cleanPhone = (phone) => String(phone || '').replace(/[^\d]/g, '');
+
 // Helper para Defer / Promessas Adiar
 class Deferred {
   constructor() {
@@ -59,7 +62,7 @@ async function initializeSavedAccounts() {
         const me = await client.getMe();
         
         if (me) {
-          activeClients.set(acc.phone, client);
+          activeClients.set(cleanPhone(acc.phone), client);
           console.log(`[Telegram] Conta +${acc.phone} (${me.firstName || 'Sem Nome'}) conectada com sucesso!`);
         } else {
           throw new Error('Falha ao obter dados do usuário');
@@ -157,8 +160,9 @@ async function runScheduler() {
       let phoneToUse = null;
       
       for (const phone of campaignAccounts) {
-        if (activeClients.has(phone)) {
-          clientToUse = activeClients.get(phone);
+        const cleanedPhone = cleanPhone(phone);
+        if (activeClients.has(cleanedPhone)) {
+          clientToUse = activeClients.get(cleanedPhone);
           phoneToUse = phone;
           // Rotaciona a conta: remove a conta usada e joga pro final do array da campanha
           // para o próximo disparo usar outra conta
@@ -310,7 +314,7 @@ app.get('/api/accounts', async (req, res) => {
   // Retorna com status de ativação em memória atualizado
   const mapped = accounts.map(acc => ({
     ...acc,
-    isOnline: activeClients.has(acc.phone)
+    isOnline: activeClients.has(cleanPhone(acc.phone))
   }));
   res.json(mapped);
 });
@@ -319,11 +323,12 @@ app.delete('/api/accounts/:phone', async (req, res) => {
   const { phone } = req.params;
   
   // Desconecta o cliente em memória se houver
-  if (activeClients.has(phone)) {
+  const cleaned = cleanPhone(phone);
+  if (activeClients.has(cleaned)) {
     try {
-      const client = activeClients.get(phone);
+      const client = activeClients.get(cleaned);
       await client.disconnect();
-      activeClients.delete(phone);
+      activeClients.delete(cleaned);
     } catch (e) {
       console.error(e);
     }
@@ -336,14 +341,14 @@ app.delete('/api/accounts/:phone', async (req, res) => {
 // Buscar todos os grupos e canais de uma conta ativa
 app.get('/api/accounts/:phone/groups', async (req, res) => {
   const { phone } = req.params;
-  const client = activeClients.get(phone);
+  const client = activeClients.get(cleanPhone(phone));
   
   if (!client) {
     return res.status(400).json({ error: 'Esta conta do Telegram não está conectada ou ativa no momento.' });
   }
   
   try {
-    const dialogs = await client.getDialogs({});
+    const dialogs = await client.getDialogs({ limit: 150 });
     const groups = dialogs
       .filter(d => d.isGroup || d.isChannel)
       .map(d => ({
@@ -431,7 +436,7 @@ app.post('/api/accounts/connect/phone/start', async (req, res) => {
     });
     
     // Armazena no cache de conexões ativas
-    activeClients.set(me.phone, client);
+    activeClients.set(cleanPhone(me.phone), client);
     console.log(`[Auth Phone] Conta +${me.phone} autenticada com sucesso!`);
     
     // Limpa a conexão pendente após alguns minutos de segurança
@@ -553,7 +558,7 @@ app.post('/api/accounts/connect/qr/start', async (req, res) => {
     });
     
     // Armazena no cache de conexões ativas
-    activeClients.set(me.phone, client);
+    activeClients.set(cleanPhone(me.phone), client);
     console.log(`[Auth QR] Conta +${me.phone} autenticada via QR com sucesso!`);
     
     // Limpa a conexão pendente após alguns minutos de segurança

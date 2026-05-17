@@ -1,0 +1,21 @@
+{
+  "name": "divuga-telegram-automation",
+  "version": "1.0.0",
+  "description": "Multi-account Telegram automation client",
+  "main": "backend/server.js",
+  "scripts": {
+    "start": "node backend/server.js",
+    "backend": "node backend/server.js",
+    "frontend": "npm run dev --prefix frontend",
+    "dev": "npx concurrently \"npm run backend\" \"npm run frontend\"",
+    "build": "npm run build --prefix frontend",
+    "install-all": "npm install && npm install --prefix frontend"
+  },
+  "dependencies": {
+    "express": "^4.21.2",
+    "cors": "^2.8.5",
+    "telegram": "^2.26.15",
+    "qrcode": "^1.5.4",
+    "uuid": "^11.0.3"
+  }
+}

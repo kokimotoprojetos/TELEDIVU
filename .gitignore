@@ -1,0 +1,18 @@
+# Dependências
+node_modules/
+frontend/node_modules/
+
+# Build estático do frontend
+frontend/dist/
+
+# Banco de dados local e chaves de sessão do Telegram (Altamente sensível!)
+backend/db.json
+.env
+.env.local
+.env.*.local
+
+# Logs e temporários
+logs/
+*.log
+npm-debug.log*
+.DS_Store

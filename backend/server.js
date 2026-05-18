@@ -1,3 +1,4 @@
+require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
 const bodyParser = require('body-parser');
@@ -7,6 +8,7 @@ const qrcode = require('qrcode');
 const { v4: uuidv4 } = require('uuid');
 const db = require('./db');
 const path = require('path');
+const crypto = require('crypto');
 
 const app = express();
 const PORT = process.env.PORT || 5000;
@@ -16,6 +18,47 @@ app.use(bodyParser.json());
 
 // Servir arquivos estáticos do frontend em produção se compilado
 app.use(express.static(path.join(__dirname, '../frontend/dist')));
+
+// -------------------------------------------------------------
+// SISTEMA DE SEGURANÇA E JWT NATIVO (SEM DEPENDÊNCIAS EXTERNAS)
+// -------------------------------------------------------------
+const JWT_SECRET = process.env.JWT_SECRET || 'divuga-super-secret-key-12345';
+
+function generateToken(payload) {
+  const header = Buffer.from(JSON.stringify({ alg: 'HS256', typ: 'JWT' })).toString('base64url');
+  const body = Buffer.from(JSON.stringify(payload)).toString('base64url');
+  const signature = crypto.createHmac('sha256', JWT_SECRET).update(`${header}.${body}`).digest('base64url');
+  return `${header}.${body}.${signature}`;
+}
+
+function verifyToken(token) {
+  try {
+    const [header, body, signature] = token.split('.');
+    const expectedSignature = crypto.createHmac('sha256', JWT_SECRET).update(`${header}.${body}`).digest('base64url');
+    if (signature !== expectedSignature) return null;
+    return JSON.parse(Buffer.from(body, 'base64url').toString('utf8'));
+  } catch (err) {
+    return null;
+  }
+}
+
+function hashPassword(password) {
+  return crypto.createHash('sha256').update(password).digest('hex');
+}
+
+function requireAuth(req, res, next) {
+  const authHeader = req.headers.authorization;
+  if (!authHeader || !authHeader.startsWith('Bearer ')) {
+    return res.status(401).json({ error: 'Token de autenticação não fornecido ou inválido.' });
+  }
+  const token = authHeader.split(' ')[1];
+  const user = verifyToken(token);
+  if (!user) {
+    return res.status(401).json({ error: 'Sessão expirada. Por favor, faça login novamente.' });
+  }
+  req.user = user;
+  next();
+}
 
 // Estado em memória
 const activeClients = new Map(); // phone -> TelegramClient
@@ -77,7 +120,8 @@ async function initializeSavedAccounts() {
           accountPhone: acc.phone,
           target: 'Sistema',
           status: 'failed',
-          error: `Sessão expirou ou foi desconectada pelo Telegram: ${err.message}`
+          error: `Sessão expirou ou foi desconectada pelo Telegram: ${err.message}`,
+          userId: acc.userId
         });
       }
     }
@@ -155,7 +199,8 @@ async function runScheduler() {
             accountPhone: 'Sistema',
             target: 'Sistema',
             status: 'success',
-            error: 'Todos os alvos contatados. Opção LOOP ativa: reiniciando fila de envios a partir do primeiro alvo.'
+            error: 'Todos os alvos contatados. Opção LOOP ativa: reiniciando fila de envios a partir do primeiro alvo.',
+            userId: cmp.userId
           });
           continue;
         } else {
@@ -168,7 +213,8 @@ async function runScheduler() {
             accountPhone: 'Sistema',
             target: 'Todos',
             status: 'success',
-            error: 'Campanha finalizada. Todos os alvos foram contatados!'
+            error: 'Campanha finalizada. Todos os alvos foram contatados!',
+            userId: cmp.userId
           });
           continue;
         }
@@ -208,7 +254,8 @@ async function runScheduler() {
           accountPhone: 'Sistema',
           target: target,
           status: 'failed',
-          error: 'Campanha pausada: nenhuma das contas selecionadas está conectada no momento.'
+          error: 'Campanha pausada: nenhuma das contas selecionadas está conectada no momento.',
+          userId: cmp.userId
         });
         continue;
       }
@@ -242,7 +289,8 @@ async function runScheduler() {
           accountPhone: phoneToUse,
           target: target,
           status: 'success',
-          error: null
+          error: null,
+          userId: cmp.userId
         });
         
         console.log(`[Agendador] Sucesso no envio para ${target}. Próximo disparo em ${Math.round(finalDelay/1000)} segundos.`);
@@ -263,7 +311,8 @@ async function runScheduler() {
             accountPhone: phoneToUse,
             target: target,
             status: 'failed',
-            error: `Bloqueio de envio temporário (Flood Wait) de ${seconds} segundos. O sistema aguardará.`
+            error: `Bloqueio de envio temporário (Flood Wait) de ${seconds} segundos. O sistema aguardará.`,
+            userId: cmp.userId
           });
           
           // Adia a campanha pelo tempo do bloqueio + 30s de segurança
@@ -284,7 +333,8 @@ async function runScheduler() {
             accountPhone: phoneToUse,
             target: target,
             status: 'failed',
-            error: `Erro ao enviar: ${err.message}`
+            error: `Erro ao enviar: ${err.message}`,
+            userId: cmp.userId
           });
         }
       }
@@ -295,24 +345,78 @@ async function runScheduler() {
 // Inicia loop do agendador a cada 10 segundos
 setInterval(runScheduler, 10000);
 
+// =============================================================
+// ROTAS DE AUTENTICAÇÃO
+// =============================================================
+app.post('/api/auth/register', async (req, res) => {
+  const { username, password } = req.body;
+  if (!username || !password) {
+    return res.status(400).json({ error: 'Usuário e senha são obrigatórios.' });
+  }
+
+  try {
+    const existing = await db.getUserByUsername(username);
+    if (existing) {
+      return res.status(400).json({ error: 'Este nome de usuário já está em uso.' });
+    }
+
+    const newUser = {
+      id: uuidv4(),
+      username: username.trim(),
+      password: hashPassword(password),
+      createdAt: new Date().toISOString()
+    };
+
+    await db.saveUser(newUser);
+    const token = generateToken({ id: newUser.id, username: newUser.username });
+    res.json({ token, user: { id: newUser.id, username: newUser.username } });
+  } catch (err) {
+    res.status(500).json({ error: `Erro no registro: ${err.message}` });
+  }
+});
+
+app.post('/api/auth/login', async (req, res) => {
+  const { username, password } = req.body;
+  if (!username || !password) {
+    return res.status(400).json({ error: 'Usuário e senha são obrigatórios.' });
+  }
+
+  try {
+    const user = await db.getUserByUsername(username);
+    if (!user || user.password !== hashPassword(password)) {
+      return res.status(401).json({ error: 'Usuário ou senha incorretos.' });
+    }
+
+    const token = generateToken({ id: user.id, username: user.username });
+    res.json({ token, user: { id: user.id, username: user.username } });
+  } catch (err) {
+    res.status(500).json({ error: `Erro no login: ${err.message}` });
+  }
+});
+
+app.get('/api/auth/me', requireAuth, async (req, res) => {
+  res.json({ user: req.user });
+});
+
 // -------------------------------------------------------------
 // ROTAS DE CONFIGURAÇÕES E ESTATÍSTICAS
 // -------------------------------------------------------------
-app.get('/api/settings', async (req, res) => {
+app.get('/api/settings', requireAuth, async (req, res) => {
   const settings = await db.getSettings();
   res.json(settings);
 });
 
-app.post('/api/settings', async (req, res) => {
+app.post('/api/settings', requireAuth, async (req, res) => {
   const { defaultApiId, defaultApiHash } = req.body;
   const saved = await db.saveSettings({ defaultApiId, defaultApiHash });
   res.json(saved);
 });
 
-app.get('/api/stats', async (req, res) => {
-  const accounts = await db.getAccounts();
-  const campaigns = await db.getCampaigns();
-  const logs = await db.getLogs();
+app.get('/api/stats', requireAuth, async (req, res) => {
+  const userId = req.user.id;
+  const accounts = await db.getAccountsByUserId(userId);
+  const campaigns = await db.getCampaignsByUserId(userId);
+  const logs = await db.getLogsByUserId(userId);
   
   const connectedCount = accounts.filter(a => a.status === 'connected').length;
   const activeCampaigns = campaigns.filter(c => c.status === 'active').length;
@@ -332,8 +436,9 @@ app.get('/api/stats', async (req, res) => {
 // -------------------------------------------------------------
 // ROTAS DE CONTAS DO TELEGRAM
 // -------------------------------------------------------------
-app.get('/api/accounts', async (req, res) => {
-  const accounts = await db.getAccounts();
+app.get('/api/accounts', requireAuth, async (req, res) => {
+  const userId = req.user.id;
+  const accounts = await db.getAccountsByUserId(userId);
   // Retorna com status de ativação em memória atualizado
   const mapped = accounts.map(acc => ({
     ...acc,
@@ -342,9 +447,15 @@ app.get('/api/accounts', async (req, res) => {
   res.json(mapped);
 });
 
-app.delete('/api/accounts/:phone', async (req, res) => {
+app.delete('/api/accounts/:phone', requireAuth, async (req, res) => {
   const { phone } = req.params;
+  const userId = req.user.id;
   
+  const account = await db.getAccountByPhone(phone);
+  if (!account || account.userId !== userId) {
+    return res.status(403).json({ error: 'Você não tem permissão para desconectar esta conta.' });
+  }
+
   // Desconecta o cliente em memória se houver
   const cleaned = cleanPhone(phone);
   if (activeClients.has(cleaned)) {
@@ -362,8 +473,15 @@ app.delete('/api/accounts/:phone', async (req, res) => {
 });
 
 // Buscar todos os grupos, canais, chats de conversa e bots de uma conta ativa
-app.get('/api/accounts/:phone/groups', async (req, res) => {
+app.get('/api/accounts/:phone/groups', requireAuth, async (req, res) => {
   const { phone } = req.params;
+  const userId = req.user.id;
+
+  const account = await db.getAccountByPhone(phone);
+  if (!account || account.userId !== userId) {
+    return res.status(403).json({ error: 'Você não tem permissão para acessar os grupos desta conta.' });
+  }
+
   const client = activeClients.get(cleanPhone(phone));
   
   if (!client) {
@@ -412,7 +530,7 @@ app.get('/api/accounts/:phone/groups', async (req, res) => {
 // -------------------------------------------------------------
 // FLUXO DE LOGIN ASSÍNCRONO POR NÚMERO (SMS)
 // -------------------------------------------------------------
-app.post('/api/accounts/connect/phone/start', async (req, res) => {
+app.post('/api/accounts/connect/phone/start', requireAuth, async (req, res) => {
   const { phone } = req.body;
   if (!phone) return res.status(400).json({ error: 'Número de telefone é obrigatório.' });
   
@@ -432,6 +550,7 @@ app.post('/api/accounts/connect/phone/start', async (req, res) => {
     client,
     phone: cleanPhone,
     status: 'connecting',
+    userId: req.user.id, // Vínculo com o usuário logado
     phoneCodeDeferred: new Deferred(),
     passwordDeferred: new Deferred(),
     error: null
@@ -476,7 +595,8 @@ app.post('/api/accounts/connect/phone/start', async (req, res) => {
       username: me.username || '',
       session: client.session.save(),
       connectedAt: new Date().toISOString(),
-      status: 'connected'
+      status: 'connected',
+      userId: pendingConn.userId // Vincula a conta ao usuário
     });
     
     // Armazena no cache de conexões ativas
@@ -496,11 +616,12 @@ app.post('/api/accounts/connect/phone/start', async (req, res) => {
 });
 
 // Envio de código recebido
-app.post('/api/accounts/connect/phone/submit-code', async (req, res) => {
+app.post('/api/accounts/connect/phone/submit-code', requireAuth, async (req, res) => {
   const { sessionId, code } = req.body;
   const conn = pendingConnections.get(sessionId);
   
   if (!conn) return res.status(404).json({ error: 'Sessão de conexão expirada ou inválida.' });
+  if (conn.userId !== req.user.id) return res.status(403).json({ error: 'Acesso negado.' });
   if (conn.status !== 'awaiting_code') return res.status(400).json({ error: 'A conexão não está aguardando código no momento.' });
   
   conn.phoneCodeDeferred.resolve(code);
@@ -508,11 +629,12 @@ app.post('/api/accounts/connect/phone/submit-code', async (req, res) => {
 });
 
 // Envio de senha 2FA recebida
-app.post('/api/accounts/connect/phone/submit-password', async (req, res) => {
+app.post('/api/accounts/connect/phone/submit-password', requireAuth, async (req, res) => {
   const { sessionId, password } = req.body;
   const conn = pendingConnections.get(sessionId);
   
   if (!conn) return res.status(404).json({ error: 'Sessão de conexão expirada ou inválida.' });
+  if (conn.userId !== req.user.id) return res.status(403).json({ error: 'Acesso negado.' });
   if (conn.status !== 'awaiting_password') return res.status(400).json({ error: 'A conexão não está aguardando senha 2FA no momento.' });
   
   conn.passwordDeferred.resolve(password);
@@ -522,7 +644,7 @@ app.post('/api/accounts/connect/phone/submit-password', async (req, res) => {
 // -------------------------------------------------------------
 // FLUXO DE LOGIN ASSÍNCRONO POR QR CODE
 // -------------------------------------------------------------
-app.post('/api/accounts/connect/qr/start', async (req, res) => {
+app.post('/api/accounts/connect/qr/start', requireAuth, async (req, res) => {
   const settings = await db.getSettings();
   const sessionId = uuidv4();
   const stringSession = new StringSession("");
@@ -537,6 +659,7 @@ app.post('/api/accounts/connect/qr/start', async (req, res) => {
     client,
     phone: null,
     status: 'connecting',
+    userId: req.user.id, // Vínculo com o usuário logado
     qrLink: null,
     qrImage: null, // base64 do QR code
     passwordDeferred: new Deferred(),
@@ -598,7 +721,8 @@ app.post('/api/accounts/connect/qr/start', async (req, res) => {
       username: me.username || '',
       session: client.session.save(),
       connectedAt: new Date().toISOString(),
-      status: 'connected'
+      status: 'connected',
+      userId: pendingConn.userId // Vincula a conta ao usuário
     });
     
     // Armazena no cache de conexões ativas
@@ -618,12 +742,16 @@ app.post('/api/accounts/connect/qr/start', async (req, res) => {
 });
 
 // Consulta de status de conexões pendentes (Tanto QR quanto Telefone utilizam esta rota!)
-app.get('/api/accounts/connect/status', async (req, res) => {
+app.get('/api/accounts/connect/status', requireAuth, async (req, res) => {
   const { sessionId } = req.query;
   const conn = pendingConnections.get(sessionId);
   
   if (!conn) {
     return res.status(404).json({ error: 'Sessão expirada ou não encontrada.' });
+  }
+  
+  if (conn.userId !== req.user.id) {
+    return res.status(403).json({ error: 'Acesso negado.' });
   }
   
   res.json({
@@ -638,13 +766,21 @@ app.get('/api/accounts/connect/status', async (req, res) => {
 // -------------------------------------------------------------
 // ROTAS DE CAMPANHAS DE AUTOMACÃO
 // -------------------------------------------------------------
-app.get('/api/campaigns', async (req, res) => {
-  const campaigns = await db.getCampaigns();
+app.get('/api/campaigns', requireAuth, async (req, res) => {
+  const campaigns = await db.getCampaignsByUserId(req.user.id);
   res.json(campaigns);
 });
 
-app.post('/api/campaigns', async (req, res) => {
+app.post('/api/campaigns', requireAuth, async (req, res) => {
   const { id, name, accounts, targetsText, message, delay, randomDelay, loop } = req.body;
+  const userId = req.user.id;
+  
+  if (id) {
+    const existing = await db.getCampaignById(id);
+    if (!existing || existing.userId !== userId) {
+      return res.status(403).json({ error: 'Você não tem permissão para editar esta campanha.' });
+    }
+  }
   
   // Converte a caixa de texto de alvos em um array limpo
   const targets = targetsText
@@ -662,6 +798,7 @@ app.post('/api/campaigns', async (req, res) => {
     delay: Number(delay) || 60,
     randomDelay: Number(randomDelay) || 10,
     loop: !!loop, // Garante que seja booleano
+    userId: userId, // Salva o ID do dono
     status: id ? (await db.getCampaignById(id))?.status || 'paused' : 'paused',
     sentCount: id ? (await db.getCampaignById(id))?.sentCount || 0 : 0,
     failedCount: id ? (await db.getCampaignById(id))?.failedCount || 0 : 0,
@@ -674,17 +811,26 @@ app.post('/api/campaigns', async (req, res) => {
   res.json(saved);
 });
 
-app.delete('/api/campaigns/:id', async (req, res) => {
+app.delete('/api/campaigns/:id', requireAuth, async (req, res) => {
   const { id } = req.params;
+  const userId = req.user.id;
+
+  const cmp = await db.getCampaignById(id);
+  if (!cmp || cmp.userId !== userId) {
+    return res.status(403).json({ error: 'Você não tem permissão para deletar esta campanha.' });
+  }
+
   await db.deleteCampaign(id);
   res.json({ success: true, message: 'Campanha deletada.' });
 });
 
-app.post('/api/campaigns/:id/toggle', async (req, res) => {
+app.post('/api/campaigns/:id/toggle', requireAuth, async (req, res) => {
   const { id } = req.params;
+  const userId = req.user.id;
   const cmp = await db.getCampaignById(id);
   
   if (!cmp) return res.status(404).json({ error: 'Campanha não encontrada.' });
+  if (cmp.userId !== userId) return res.status(403).json({ error: 'Você não tem permissão para gerenciar esta campanha.' });
   
   if (cmp.status === 'active') {
     cmp.status = 'paused';
@@ -708,13 +854,13 @@ app.post('/api/campaigns/:id/toggle', async (req, res) => {
 // -------------------------------------------------------------
 // ROTAS DE LOGS
 // -------------------------------------------------------------
-app.get('/api/logs', async (req, res) => {
-  const logs = await db.getLogs();
+app.get('/api/logs', requireAuth, async (req, res) => {
+  const logs = await db.getLogsByUserId(req.user.id);
   res.json(logs);
 });
 
-app.post('/api/logs/clear', async (req, res) => {
-  await db.clearLogs();
+app.post('/api/logs/clear', requireAuth, async (req, res) => {
+  await db.clearLogsByUserId(req.user.id);
   res.json({ success: true });
 });
 

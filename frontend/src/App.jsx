@@ -1,9 +1,47 @@
 import React, { useState, useEffect, useRef } from 'react';
 
-const API_BASE = import.meta.env.VITE_API_BASE_URL || 'http://localhost:5000/api';
+const API_BASE = import.meta.env.VITE_API_BASE_URL || 
+  (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1'
+    ? 'http://localhost:5000/api'
+    : `${window.location.origin}/api`);
+
+// Helper de requisições autenticadas com controle automático de 401
+const authenticatedFetch = async (url, options = {}) => {
+  const token = localStorage.getItem('divuga_token');
+  const headers = {
+    'Content-Type': 'application/json',
+    ...options.headers,
+  };
+  if (token) {
+    headers['Authorization'] = `Bearer ${token}`;
+  }
+  
+  const response = await fetch(url, {
+    ...options,
+    headers
+  });
+  
+  if (response.status === 401) {
+    localStorage.removeItem('divuga_token');
+    localStorage.removeItem('divuga_user');
+    window.location.reload();
+    throw new Error('Sessão expirada. Por favor, faça login novamente.');
+  }
+  
+  return response;
+};
 
 function App() {
   const [activeTab, setActiveTab] = useState('dashboard');
+  
+  // Controle de Sessão de Usuário
+  const [token, setToken] = useState(localStorage.getItem('divuga_token') || '');
+  const [currentUser, setCurrentUser] = useState(JSON.parse(localStorage.getItem('divuga_user') || 'null'));
+  const [showRegister, setShowRegister] = useState(false);
+  const [authForm, setAuthForm] = useState({ username: '', password: '' });
+  const [authError, setAuthError] = useState('');
+  const [authLoading, setAuthLoading] = useState(false);
+
   const [stats, setStats] = useState({
     totalAccounts: 0,
     connectedAccounts: 0,
@@ -57,23 +95,66 @@ function App() {
   const dataPollIntervalRef = useRef(null);
 
   // -------------------------------------------------------------
+  // LÓGICA DE AUTENTICAÇÃO (SISTEMA DE LOGIN E REGISTRO)
+  // -------------------------------------------------------------
+  const handleAuthSubmit = async (e) => {
+    e.preventDefault();
+    setAuthError('');
+    setAuthLoading(true);
+    const endpoint = showRegister ? 'register' : 'login';
+    try {
+      const res = await fetch(`${API_BASE}/auth/${endpoint}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(authForm)
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data.error || 'Erro ao realizar autenticação.');
+      }
+      
+      localStorage.setItem('divuga_token', data.token);
+      localStorage.setItem('divuga_user', JSON.stringify(data.user));
+      setToken(data.token);
+      setCurrentUser(data.user);
+      setAuthForm({ username: '', password: '' });
+    } catch (err) {
+      setAuthError(err.message);
+    } finally {
+      setAuthLoading(false);
+    }
+  };
+
+  const handleLogout = () => {
+    localStorage.removeItem('divuga_token');
+    localStorage.removeItem('divuga_user');
+    setToken('');
+    setCurrentUser(null);
+    window.location.reload();
+  };
+
+  // -------------------------------------------------------------
   // CARREGAMENTO E SINC DE DADOS
   // -------------------------------------------------------------
   const fetchData = async () => {
+    if (!localStorage.getItem('divuga_token')) return;
     try {
-      const statsRes = await fetch(`${API_BASE}/stats`);
+      const [statsRes, accountsRes, campaignsRes, logsRes] = await Promise.all([
+        authenticatedFetch(`${API_BASE}/stats`),
+        authenticatedFetch(`${API_BASE}/accounts`),
+        authenticatedFetch(`${API_BASE}/campaigns`),
+        authenticatedFetch(`${API_BASE}/logs`)
+      ]);
+      
       const statsData = await statsRes.json();
       setStats(statsData);
 
-      const accountsRes = await fetch(`${API_BASE}/accounts`);
       const accountsData = await accountsRes.json();
       setAccounts(accountsData);
 
-      const campaignsRes = await fetch(`${API_BASE}/campaigns`);
       const campaignsData = await campaignsRes.json();
       setCampaigns(campaignsData);
 
-      const logsRes = await fetch(`${API_BASE}/logs`);
       const logsData = await logsRes.json();
       setLogs(logsData);
     } catch (err) {
@@ -82,8 +163,9 @@ function App() {
   };
 
   const fetchSettings = async () => {
+    if (!localStorage.getItem('divuga_token')) return;
     try {
-      const res = await fetch(`${API_BASE}/settings`);
+      const res = await authenticatedFetch(`${API_BASE}/settings`);
       const data = await res.json();
       setSettings(data);
     } catch (e) {
@@ -92,17 +174,18 @@ function App() {
   };
 
   useEffect(() => {
-    fetchData();
-    fetchSettings();
-
-    // Polling contínuo dos dados do Dashboard a cada 4 segundos
-    dataPollIntervalRef.current = setInterval(fetchData, 4000);
+    if (token) {
+      fetchData();
+      fetchSettings();
+      // Polling contínuo dos dados do Dashboard a cada 4 segundos
+      dataPollIntervalRef.current = setInterval(fetchData, 4000);
+    }
 
     return () => {
       if (dataPollIntervalRef.current) clearInterval(dataPollIntervalRef.current);
       if (pollIntervalRef.current) clearInterval(pollIntervalRef.current);
     };
-  }, []);
+  }, [token]);
 
   // Buscar grupos e canais das contas selecionadas para a campanha
   const fetchGroupsForAccounts = async (selectedPhones) => {
@@ -121,7 +204,7 @@ function App() {
         try {
           const url = `${API_BASE}/accounts/${phone}/groups`;
           console.log(`[TELEDIVU] Fazendo requisição para obter grupos da conta +${phone} na URL: ${url}`);
-          const res = await fetch(url);
+          const res = await authenticatedFetch(url);
           console.log(`[TELEDIVU] Resposta da API para +${phone} - Status: ${res.status}`);
           
           if (res.ok) {
@@ -168,12 +251,12 @@ function App() {
   };
 
   useEffect(() => {
-    if (isCampaignModalOpen) {
+    if (isCampaignModalOpen && token) {
       fetchGroupsForAccounts(campaignForm.accounts);
     } else {
       setAvailableGroups([]);
     }
-  }, [campaignForm.accounts, isCampaignModalOpen]);
+  }, [campaignForm.accounts, isCampaignModalOpen, token]);
 
   // -------------------------------------------------------------
   // FLUXO DE CONEXÃO E AUTENTICAÇÃO (TELEGRAM)
@@ -183,7 +266,7 @@ function App() {
     setConnectionStatus('connecting');
     setQrImage(null);
     try {
-      const res = await fetch(`${API_BASE}/accounts/connect/qr/start`, { method: 'POST' });
+      const res = await authenticatedFetch(`${API_BASE}/accounts/connect/qr/start`, { method: 'POST' });
       const data = await res.json();
       setConnectionSessionId(data.sessionId);
       startStatusPolling(data.sessionId);
@@ -198,9 +281,8 @@ function App() {
     setConnectionError(null);
     setConnectionStatus('connecting');
     try {
-      const res = await fetch(`${API_BASE}/accounts/connect/phone/start`, {
+      const res = await authenticatedFetch(`${API_BASE}/accounts/connect/phone/start`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ phone: phoneInput })
       });
       const data = await res.json();
@@ -215,9 +297,8 @@ function App() {
   const submitSmsCode = async () => {
     if (!smsCodeInput) return;
     try {
-      await fetch(`${API_BASE}/accounts/connect/phone/submit-code`, {
+      await authenticatedFetch(`${API_BASE}/accounts/connect/phone/submit-code`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ sessionId: connectionSessionId, code: smsCodeInput })
       });
     } catch (e) {
@@ -228,9 +309,8 @@ function App() {
   const submitPassword2fa = async () => {
     if (!password2faInput) return;
     try {
-      await fetch(`${API_BASE}/accounts/connect/phone/submit-password`, {
+      await authenticatedFetch(`${API_BASE}/accounts/connect/phone/submit-password`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ sessionId: connectionSessionId, password: password2faInput })
       });
     } catch (e) {
@@ -243,7 +323,7 @@ function App() {
 
     pollIntervalRef.current = setInterval(async () => {
       try {
-        const res = await fetch(`${API_BASE}/accounts/connect/status?sessionId=${sessionId}`);
+        const res = await authenticatedFetch(`${API_BASE}/accounts/connect/status?sessionId=${sessionId}`);
         const data = await res.json();
         
         setConnectionStatus(data.status);
@@ -282,7 +362,7 @@ function App() {
   const deleteAccount = async (phone) => {
     if (window.confirm(`Deseja realmente desconectar e remover a conta +${phone}?`)) {
       try {
-        await fetch(`${API_BASE}/accounts/${phone}`, { method: 'DELETE' });
+        await authenticatedFetch(`${API_BASE}/accounts/${phone}`, { method: 'DELETE' });
         fetchData();
       } catch (e) {
         console.error(e);
@@ -345,9 +425,8 @@ function App() {
     if (!campaignForm.message) return alert('Escreva a mensagem da campanha.');
 
     try {
-      const res = await fetch(`${API_BASE}/campaigns`, {
+      const res = await authenticatedFetch(`${API_BASE}/campaigns`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           id: editingCampaign ? editingCampaign.id : undefined,
           ...campaignForm
@@ -364,7 +443,7 @@ function App() {
 
   const toggleCampaign = async (id) => {
     try {
-      await fetch(`${API_BASE}/campaigns/${id}/toggle`, { method: 'POST' });
+      await authenticatedFetch(`${API_BASE}/campaigns/${id}/toggle`, { method: 'POST' });
       fetchData();
     } catch (e) {
       console.error(e);
@@ -374,7 +453,7 @@ function App() {
   const deleteCampaign = async (id) => {
     if (window.confirm('Excluir esta campanha permanentemente?')) {
       try {
-        await fetch(`${API_BASE}/campaigns/${id}`, { method: 'DELETE' });
+        await authenticatedFetch(`${API_BASE}/campaigns/${id}`, { method: 'DELETE' });
         fetchData();
       } catch (e) {
         console.error(e);
@@ -388,9 +467,8 @@ function App() {
   const saveSettings = async (e) => {
     e.preventDefault();
     try {
-      const res = await fetch(`${API_BASE}/settings`, {
+      const res = await authenticatedFetch(`${API_BASE}/settings`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(settings)
       });
       if (res.ok) {
@@ -405,7 +483,7 @@ function App() {
   const clearLogs = async () => {
     if (window.confirm('Limpar todos os registros de disparos da tela?')) {
       try {
-        await fetch(`${API_BASE}/logs/clear`, { method: 'POST' });
+        await authenticatedFetch(`${API_BASE}/logs/clear`, { method: 'POST' });
         fetchData();
       } catch (e) {
         console.error(e);
@@ -776,6 +854,197 @@ function App() {
   // -------------------------------------------------------------
   // RENDER COMPLETO DO COMPONENTE
   // -------------------------------------------------------------
+  if (!token) {
+    return (
+      <div style={{
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        minHeight: '100vh',
+        width: '100vw',
+        background: 'radial-gradient(circle at 30% 30%, rgba(99, 102, 241, 0.15) 0%, transparent 40%), radial-gradient(circle at 70% 70%, rgba(139, 92, 246, 0.15) 0%, transparent 40%), var(--bg-primary)',
+        padding: '20px',
+        position: 'relative',
+        overflow: 'hidden'
+      }}>
+        {/* Animated Background Orbs */}
+        <div style={{
+          position: 'absolute',
+          width: '500px',
+          height: '500px',
+          borderRadius: '50%',
+          background: 'rgba(99, 102, 241, 0.05)',
+          filter: 'blur(80px)',
+          top: '-10%',
+          left: '-10%',
+          pointerEvents: 'none'
+        }} />
+        <div style={{
+          position: 'absolute',
+          width: '600px',
+          height: '600px',
+          borderRadius: '50%',
+          background: 'rgba(139, 92, 246, 0.05)',
+          filter: 'blur(100px)',
+          bottom: '-10%',
+          right: '-10%',
+          pointerEvents: 'none'
+        }} />
+
+        <div className="card" style={{
+          width: '100%',
+          maxWidth: '440px',
+          padding: '40px',
+          background: 'var(--glass-bg)',
+          border: '1px solid var(--glass-border)',
+          borderRadius: 'var(--radius-lg)',
+          boxShadow: '0 20px 50px rgba(0, 0, 0, 0.3), var(--shadow-neon)',
+          backdropFilter: 'blur(20px)',
+          WebkitBackdropFilter: 'blur(20px)',
+          position: 'relative',
+          zIndex: 1
+        }}>
+          {/* Logo / Title Header */}
+          <div style={{ textAlign: 'center', marginBottom: '32px' }}>
+            <div style={{
+              display: 'inline-flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              width: '64px',
+              height: '64px',
+              borderRadius: '16px',
+              background: 'var(--grad-primary)',
+              marginBottom: '16px',
+              boxShadow: '0 8px 24px rgba(99, 102, 241, 0.3)'
+            }}>
+              <span className="material-icons-round" style={{ fontSize: '32px', color: '#fff' }}>rocket_launch</span>
+            </div>
+            <h2 style={{
+              fontFamily: 'var(--font-display)',
+              fontSize: '28px',
+              fontWeight: '800',
+              letterSpacing: '-0.5px',
+              background: 'linear-gradient(135deg, #fff 0%, #a5b4fc 100%)',
+              WebkitBackgroundClip: 'text',
+              WebkitTextFillColor: 'transparent',
+              marginBottom: '6px'
+            }}>
+              TELEDIVU
+            </h2>
+            <p style={{ fontSize: '13px', color: 'var(--text-secondary)' }}>
+              {showRegister ? 'Crie sua conta para começar a divulgar' : 'Faça login para gerenciar suas conexões e campanhas'}
+            </p>
+          </div>
+
+          {authError && (
+            <div style={{
+              background: 'rgba(244, 63, 94, 0.1)',
+              border: '1px solid rgba(244, 63, 94, 0.2)',
+              borderRadius: '10px',
+              padding: '12px 16px',
+              fontSize: '13px',
+              color: 'var(--color-rose)',
+              marginBottom: '24px',
+              display: 'flex',
+              alignItems: 'center',
+              gap: '8px'
+            }}>
+              <span className="material-icons-round" style={{ fontSize: '18px' }}>error_outline</span>
+              <span>{authError}</span>
+            </div>
+          )}
+
+          <form onSubmit={handleAuthSubmit}>
+            <div className="form-group" style={{ marginBottom: '20px' }}>
+              <label className="form-label" style={{ fontSize: '11px', textTransform: 'uppercase', letterSpacing: '1px', fontWeight: '700' }}>Usuário</label>
+              <div style={{ position: 'relative' }}>
+                <span className="material-icons-round" style={{
+                  position: 'absolute',
+                  left: '14px',
+                  top: '50%',
+                  transform: 'translateY(-50%)',
+                  color: 'var(--text-muted)',
+                  fontSize: '20px'
+                }}>person</span>
+                <input
+                  className="form-input"
+                  type="text"
+                  placeholder="Nome de usuário"
+                  value={authForm.username}
+                  onChange={e => setAuthForm({ ...authForm, username: e.target.value })}
+                  style={{ paddingLeft: '44px' }}
+                  required
+                />
+              </div>
+            </div>
+
+            <div className="form-group" style={{ marginBottom: '28px' }}>
+              <label className="form-label" style={{ fontSize: '11px', textTransform: 'uppercase', letterSpacing: '1px', fontWeight: '700' }}>Senha</label>
+              <div style={{ position: 'relative' }}>
+                <span className="material-icons-round" style={{
+                  position: 'absolute',
+                  left: '14px',
+                  top: '50%',
+                  transform: 'translateY(-50%)',
+                  color: 'var(--text-muted)',
+                  fontSize: '20px'
+                }}>lock</span>
+                <input
+                  className="form-input"
+                  type="password"
+                  placeholder="Sua senha secreta"
+                  value={authForm.password}
+                  onChange={e => setAuthForm({ ...authForm, password: e.target.value })}
+                  style={{ paddingLeft: '44px' }}
+                  required
+                />
+              </div>
+            </div>
+
+            <button className="btn btn-primary" type="submit" style={{ width: '100%', padding: '14px', borderRadius: '12px', fontWeight: '700', fontSize: '14px', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px' }} disabled={authLoading}>
+              {authLoading ? (
+                <>
+                  <span className="material-icons-round spinning" style={{ fontSize: '18px' }}>sync</span>
+                  {showRegister ? 'Criando Conta...' : 'Entrando...'}
+                </>
+              ) : (
+                <>
+                  <span className="material-icons-round" style={{ fontSize: '18px' }}>{showRegister ? 'person_add' : 'login'}</span>
+                  {showRegister ? 'Registrar Nova Conta' : 'Entrar no Sistema'}
+                </>
+              )}
+            </button>
+          </form>
+
+          <div style={{ textAlign: 'center', marginTop: '24px' }}>
+            <span style={{ fontSize: '13px', color: 'var(--text-secondary)' }}>
+              {showRegister ? 'Já possui uma conta?' : 'Ainda não tem conta?'}
+            </span>
+            <button
+              onClick={() => {
+                setShowRegister(!showRegister);
+                setAuthError('');
+                setAuthForm({ username: '', password: '' });
+              }}
+              style={{
+                background: 'none',
+                border: 'none',
+                color: 'var(--color-indigo)',
+                fontSize: '13px',
+                fontWeight: '700',
+                marginLeft: '6px',
+                cursor: 'pointer',
+                textDecoration: 'underline'
+              }}
+            >
+              {showRegister ? 'Faça Login' : 'Cadastre-se'}
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="app-container">
       {/* 1. Sidebar de Navegação */}
@@ -805,6 +1074,41 @@ function App() {
           <div className={`nav-item ${activeTab === 'settings' ? 'active' : ''}`} onClick={() => setActiveTab('settings')}>
             <span className="material-icons-round">settings</span>
             Configurações
+          </div>
+
+          <div style={{ height: '1px', background: 'var(--glass-border)', margin: '16px 0 8px' }} />
+
+          <div style={{
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            padding: '10px 14px',
+            borderRadius: '10px',
+            background: 'rgba(255, 255, 255, 0.02)',
+            border: '1px solid var(--glass-border)',
+            marginTop: '8px'
+          }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', overflow: 'hidden' }}>
+              <span className="material-icons-round" style={{ color: 'var(--color-indigo)', fontSize: '20px' }}>account_circle</span>
+              <span style={{ fontSize: '13px', fontWeight: '600', color: 'var(--text-primary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                {currentUser?.username}
+              </span>
+            </div>
+            <button onClick={handleLogout} style={{
+              background: 'rgba(244, 63, 94, 0.1)',
+              border: 'none',
+              borderRadius: '6px',
+              width: '28px',
+              height: '28px',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              cursor: 'pointer',
+              color: 'var(--color-rose)',
+              transition: 'var(--transition-fast)'
+            }} title="Sair do Sistema">
+              <span className="material-icons-round" style={{ fontSize: '18px' }}>logout</span>
+            </button>
           </div>
         </nav>
 

@@ -196,7 +196,7 @@ function App() {
 
   // Buscar grupos e canais das contas selecionadas para a campanha
   const fetchGroupsForAccounts = async (selectedPhones) => {
-    console.log('[TELEDIVU] Contas selecionadas na campanha para listar grupos:', selectedPhones);
+    // CORRIGIDO: removido console.log que expunha números de telefone no console do browser
     if (!selectedPhones || selectedPhones.length === 0) {
       setAvailableGroups([]);
       return;

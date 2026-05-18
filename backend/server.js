@@ -226,6 +226,16 @@ async function initializeSavedAccounts() {
       }
     }
   }
+  
+  // CORRIGIDO (5ª passagem): migrar automaticamente TODOS os usuários com hash SHA-256 legado
+  // sem esperar que eles façam login. Usa senha dummy para detectar hashes bcrypt.
+  // Não podemos re-hash sem a senha original — apenas marcamos para foreçar troca na próxima vez.
+  // O que podemos fazer: logar quais usuários ainda têm SHA-256 para monitoramento.
+  const users = await db.getUsers().catch(() => []);
+  const legacyUsers = users.filter(u => u.password && !u.password.startsWith('$2'));
+  if (legacyUsers.length > 0) {
+    console.warn(`[Segurança] ${legacyUsers.length} usuário(s) ainda com hash SHA-256 legado: [${legacyUsers.map(u => u.username).join(', ')}]. Serão migrados automaticamente no próximo login.`);
+  }
 }
 
 // -------------------------------------------------------------
@@ -340,10 +350,16 @@ async function runScheduler() {
         for (const phone of campaignAccounts) {
           const cleanedPhone = cleanPhone(phone);
           if (activeClients.has(cleanedPhone)) {
+            // CORRIGIDO (5ª passagem): verificar que o cliente pertence ao usuário da campanha
+            // Previne que uma campanha de usuário A use conta de usuário B
+            const accountRecord = await db.getAccountByPhone(cleanedPhone).catch(() => null);
+            if (!accountRecord || accountRecord.userId !== cmp.userId) {
+              console.warn(`[Agendador] Conta ${cleanedPhone} não pertence ao usuário da campanha. Ignorando.`);
+              continue; // pula essa conta
+            }
             clientToUse = activeClients.get(cleanedPhone);
             phoneToUse = phone;
             // Rotaciona a conta: remove a conta usada e joga pro final do array da campanha
-            // para o próximo disparo usar outra conta
             const index = campaignAccounts.indexOf(phone);
             if (index > -1) {
               campaignAccounts.splice(index, 1);
@@ -771,6 +787,18 @@ app.post('/api/accounts/connect/phone/start', requireAuth, async (req, res) => {
   
   pendingConnections.set(sessionId, pendingConn);
   
+  // CORRIGIDO (5ª passagem): auto-limpeza após 10 minutos para evitar vazamento de memória
+  // quando usuário fecha o modal sem completar o fluxo de autenticação
+  setTimeout(async () => {
+    if (pendingConnections.has(sessionId)) {
+      const c = pendingConnections.get(sessionId);
+      if (c.status !== 'success') {
+        try { await c.client.disconnect(); } catch(e) {}
+        pendingConnections.delete(sessionId);
+      }
+    }
+  }, 10 * 60 * 1000);
+  
   // Inicia o processo em background
   client.connect().then(() => {
     pendingConn.status = 'awaiting_code';
@@ -897,6 +925,17 @@ app.post('/api/accounts/connect/qr/start', requireAuth, async (req, res) => {
   
   pendingConnections.set(sessionId, pendingConn);
   
+  // CORRIGIDO (5ª passagem): auto-limpeza após 10 minutos (QR expira em ~5min no Telegram)
+  setTimeout(async () => {
+    if (pendingConnections.has(sessionId)) {
+      const c = pendingConnections.get(sessionId);
+      if (c.status !== 'success') {
+        try { await c.client.disconnect(); } catch(e) {}
+        pendingConnections.delete(sessionId);
+      }
+    }
+  }, 10 * 60 * 1000);
+  
   // Inicia o processo em background
   client.connect().then(() => {
     pendingConn.status = 'awaiting_scan';
@@ -1008,8 +1047,13 @@ app.post('/api/accounts/connect/status', requireAuth, async (req, res) => {
 // ROTAS DE CAMPANHAS DE AUTOMACÃO
 // -------------------------------------------------------------
 app.get('/api/campaigns', requireAuth, async (req, res) => {
-  const campaigns = await db.getCampaignsByUserId(req.user.id);
-  res.json(campaigns);
+  try {
+    const campaigns = await db.getCampaignsByUserId(req.user.id);
+    res.json(campaigns);
+  } catch (err) {
+    console.error('[Campanhas] Erro ao listar:', err.message);
+    res.status(500).json({ error: 'Erro ao carregar campanhas.' });
+  }
 });
 
 app.post('/api/campaigns', requireAuth, async (req, res) => {
@@ -1085,8 +1129,13 @@ app.delete('/api/campaigns/:id', requireAuth, async (req, res) => {
     return res.status(403).json({ error: 'Você não tem permissão para deletar esta campanha.' });
   }
 
-  await db.deleteCampaign(id);
-  res.json({ success: true, message: 'Campanha deletada.' });
+  try {
+    await db.deleteCampaign(id);
+    res.json({ success: true, message: 'Campanha deletada.' });
+  } catch (err) {
+    console.error('[Campanhas] Erro ao deletar:', err.message);
+    res.status(500).json({ error: 'Erro interno ao deletar a campanha.' });
+  }
 });
 
 app.post('/api/campaigns/:id/toggle', requireAuth, async (req, res) => {

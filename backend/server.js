@@ -860,8 +860,9 @@ app.post('/api/campaigns', requireAuth, async (req, res) => {
   const { id, name, accounts, targetsText, message, delay, randomDelay, loop } = req.body;
   const userId = req.user.id;
   
+  let existing = null;
   if (id) {
-    const existing = await db.getCampaignById(id);
+    existing = await db.getCampaignById(id);
     if (!existing || existing.userId !== userId) {
       return res.status(403).json({ error: 'Você não tem permissão para editar esta campanha.' });
     }
@@ -884,12 +885,12 @@ app.post('/api/campaigns', requireAuth, async (req, res) => {
     randomDelay: Number(randomDelay) || 10,
     loop: !!loop, // Garante que seja booleano
     userId: userId, // Salva o ID do dono
-    status: id ? (await db.getCampaignById(id))?.status || 'paused' : 'paused',
-    sentCount: id ? (await db.getCampaignById(id))?.sentCount || 0 : 0,
-    failedCount: id ? (await db.getCampaignById(id))?.failedCount || 0 : 0,
-    currentTargetIndex: id ? (await db.getCampaignById(id))?.currentTargetIndex || 0 : 0,
-    createdAt: id ? (await db.getCampaignById(id))?.createdAt || new Date().toISOString() : new Date().toISOString(),
-    nextSendAt: null
+    status: existing ? existing.status || 'paused' : 'paused',
+    sentCount: existing ? existing.sentCount || 0 : 0,
+    failedCount: existing ? existing.failedCount || 0 : 0,
+    currentTargetIndex: existing ? existing.currentTargetIndex || 0 : 0,
+    createdAt: existing ? existing.createdAt || new Date().toISOString() : new Date().toISOString(),
+    nextSendAt: existing ? existing.nextSendAt : null
   };
   
   const saved = await db.saveCampaign(campaign);

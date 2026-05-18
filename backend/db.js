@@ -167,6 +167,7 @@ const db = {
         return data || [];
       } catch (err) {
         console.error('[Supabase] Erro ao buscar contas:', err.message);
+        throw err;
       }
     }
     const data = await load();
@@ -180,6 +181,7 @@ const db = {
         return data || null;
       } catch (err) {
         console.error('[Supabase] Erro ao buscar conta por telefone:', err.message);
+        throw err;
       }
     }
     const data = await load();
@@ -203,6 +205,7 @@ const db = {
         return data;
       } catch (err) {
         console.error('[Supabase] Erro ao salvar conta:', err.message);
+        throw err;
       }
     }
     const data = await load();
@@ -223,6 +226,7 @@ const db = {
         return;
       } catch (err) {
         console.error('[Supabase] Erro ao excluir conta:', err.message);
+        throw err;
       }
     }
     const data = await load();
@@ -239,6 +243,7 @@ const db = {
         return (data || []).map(deserializeCampaign);
       } catch (err) {
         console.error('[Supabase] Erro ao buscar campanhas:', err.message);
+        throw err;
       }
     }
     const data = await load();
@@ -252,6 +257,7 @@ const db = {
         return deserializeCampaign(data);
       } catch (err) {
         console.error('[Supabase] Erro ao buscar campanha por ID:', err.message);
+        throw err;
       }
     }
     const data = await load();
@@ -305,6 +311,7 @@ const db = {
         return deserializeCampaign(data);
       } catch (err) {
         console.error('[Supabase] Erro ao salvar campanha:', err.message);
+        throw err;
       }
     }
     const data = await load();
@@ -325,6 +332,7 @@ const db = {
         return;
       } catch (err) {
         console.error('[Supabase] Erro ao excluir campanha:', err.message);
+        throw err;
       }
     }
     const data = await load();
@@ -348,6 +356,7 @@ const db = {
         });
       } catch (err) {
         console.error('[Supabase] Erro ao buscar logs:', err.message);
+        throw err;
       }
     }
     const data = await load();
@@ -392,6 +401,7 @@ const db = {
         };
       } catch (err) {
         console.error('[Supabase] Erro ao adicionar log:', err.message);
+        throw err;
       }
     }
 
@@ -411,6 +421,7 @@ const db = {
         return;
       } catch (err) {
         console.error('[Supabase] Erro ao limpar logs:', err.message);
+        throw err;
       }
     }
     const data = await load();
@@ -425,6 +436,7 @@ const db = {
         return;
       } catch (err) {
         console.error('[Supabase] Erro ao limpar logs por usuário:', err.message);
+        throw err;
       }
     }
     const data = await load();
@@ -441,6 +453,7 @@ const db = {
         return data || [];
       } catch (err) {
         console.error('[Supabase] Erro ao buscar usuários:', err.message);
+        throw err;
       }
     }
     const data = await load();
@@ -454,6 +467,7 @@ const db = {
         return data || null;
       } catch (err) {
         console.error('[Supabase] Erro ao buscar usuário por username:', err.message);
+        throw err;
       }
     }
     const data = await load();
@@ -467,6 +481,7 @@ const db = {
         return data || null;
       } catch (err) {
         console.error('[Supabase] Erro ao buscar usuário por ID:', err.message);
+        throw err;
       }
     }
     const data = await load();
@@ -486,6 +501,7 @@ const db = {
         return data;
       } catch (err) {
         console.error('[Supabase] Erro ao salvar usuário no Supabase:', err.message);
+        throw err;
       }
     }
     const data = await load();
@@ -509,6 +525,7 @@ const db = {
         return data || [];
       } catch (err) {
         console.error('[Supabase] Erro ao buscar contas por usuário:', err.message);
+        throw err;
       }
     }
     const data = await load();
@@ -522,6 +539,7 @@ const db = {
         return (data || []).map(deserializeCampaign);
       } catch (err) {
         console.error('[Supabase] Erro ao buscar campanhas por usuário:', err.message);
+        throw err;
       }
     }
     const data = await load();
@@ -544,6 +562,7 @@ const db = {
         });
       } catch (err) {
         console.error('[Supabase] Erro ao buscar logs por usuário:', err.message);
+        throw err;
       }
     }
     const data = await load();

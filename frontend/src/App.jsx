@@ -53,7 +53,13 @@ function App() {
   const [accounts, setAccounts] = useState([]);
   const [campaigns, setCampaigns] = useState([]);
   const [logs, setLogs] = useState([]);
-  const [settings, setSettings] = useState({ defaultApiId: '', defaultApiHash: '' });
+  const [settings, setSettings] = useState({
+    defaultApiId: '',
+    defaultApiHash: '',
+    useCustomApi: false,
+    customApiId: '',
+    customApiHash: ''
+  });
 
   // Modais
   const [isConnectModalOpen, setIsConnectModalOpen] = useState(false);
@@ -898,24 +904,100 @@ function App() {
       </div>
 
       <form onSubmit={saveSettings}>
-        <div className="settings-grid">
-          <div className="form-group">
-            <label className="form-label">Telegram API ID</label>
-            <input className="form-input" type="text" value={settings.defaultApiId} onChange={e => setSettings({ ...settings, defaultApiId: e.target.value })} required />
+        {/* Toggle Switch */}
+        <div style={{
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          padding: '16px',
+          background: 'rgba(255,255,255,0.02)',
+          border: '1px solid var(--glass-border)',
+          borderRadius: 'var(--radius-md)',
+          marginBottom: '20px'
+        }}>
+          <div>
+            <span style={{ fontSize: '14px', fontWeight: '600', color: '#fff', display: 'block' }}>API Personalizada</span>
+            <span style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>Ative para inserir suas próprias chaves de API (API ID e API Hash)</span>
           </div>
-
-          <div className="form-group">
-            <label className="form-label">Telegram API Hash</label>
-            <input className="form-input" type="text" value={settings.defaultApiHash} onChange={e => setSettings({ ...settings, defaultApiHash: e.target.value })} required />
-          </div>
+          <label className="switch" style={{ position: 'relative', display: 'inline-block', width: '42px', height: '24px' }}>
+            <input 
+              type="checkbox" 
+              checked={settings.useCustomApi || false} 
+              onChange={e => setSettings({ ...settings, useCustomApi: e.target.checked })} 
+              style={{ opacity: 0, width: 0, height: 0 }}
+            />
+            <span style={{
+              position: 'absolute',
+              cursor: 'pointer',
+              top: 0, left: 0, right: 0, bottom: 0,
+              backgroundColor: settings.useCustomApi ? 'var(--color-indigo)' : 'rgba(255,255,255,0.1)',
+              transition: '.3s',
+              borderRadius: '24px'
+            }}>
+              <span style={{
+                position: 'absolute',
+                content: '""',
+                height: '18px', width: '18px',
+                left: settings.useCustomApi ? '21px' : '3px',
+                bottom: '3px',
+                backgroundColor: '#fff',
+                transition: '.3s',
+                borderRadius: '50%'
+              }}></span>
+            </span>
+          </label>
         </div>
+
+        {!settings.useCustomApi ? (
+          <div style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: '10px',
+            padding: '16px',
+            background: 'rgba(16,185,129,0.06)',
+            border: '1px solid rgba(16,185,129,0.15)',
+            borderRadius: 'var(--radius-md)',
+            marginBottom: '20px',
+            fontSize: '13px',
+            color: 'var(--color-emerald)'
+          }}>
+            <span className="material-icons-round" style={{ fontSize: '18px' }}>check_circle</span>
+            <span>Usando a API Padrão e Oculta (Conexão Segura - Recomendado)</span>
+          </div>
+        ) : (
+          <div className="settings-grid" style={{ marginBottom: '20px' }}>
+            <div className="form-group">
+              <label className="form-label">Telegram API ID Personalizado</label>
+              <input 
+                className="form-input" 
+                type="text" 
+                placeholder="Ex: 31992404" 
+                value={settings.customApiId || ''} 
+                onChange={e => setSettings({ ...settings, customApiId: e.target.value })} 
+                required 
+              />
+            </div>
+
+            <div className="form-group">
+              <label className="form-label">Telegram API Hash Personalizado</label>
+              <input 
+                className="form-input" 
+                type="text" 
+                placeholder="Ex: 29d0d2dc1ac01f98aefed17f7e017edf" 
+                value={settings.customApiHash || ''} 
+                onChange={e => setSettings({ ...settings, customApiHash: e.target.value })} 
+                required 
+              />
+            </div>
+          </div>
+        )}
 
         <div style={{ background: 'rgba(99,102,241,0.06)', border: '1px solid rgba(99,102,241,0.15)', borderRadius: 'var(--radius-md)', padding: '16px', margin: '20px 0', fontSize: '13px', lineHeight: '1.6', color: 'var(--text-secondary)' }}>
-          <strong style={{ color: 'var(--text-primary)', display: 'block', marginBottom: '4px' }}>💡 Dica Importante sobre as Credenciais:</strong>
-          As credenciais configuradas acima são as credenciais padrão do aplicativo Telegram. Caso deseje criar suas próprias chaves de autenticação customizadas, você pode gerá-las gratuitamente acessando o site oficial <a href="https://my.telegram.org" target="_blank" rel="noreferrer" style={{ color: 'var(--color-indigo)', fontWeight: 'bold' }}>my.telegram.org</a> sob a seção "API Development Tools".
+          <strong style={{ color: 'var(--text-primary)', display: 'block', marginBottom: '4px' }}>💡 Dica sobre as Credenciais:</strong>
+          Ao ativar a **API Personalizada**, você precisará configurar suas próprias chaves de autenticação, que podem ser criadas gratuitamente acessando o site oficial <a href="https://my.telegram.org" target="_blank" rel="noreferrer" style={{ color: 'var(--color-indigo)', fontWeight: 'bold' }}>my.telegram.org</a>. Desative para ocultar os dados e usar a API padrão do aplicativo com estabilidade.
         </div>
 
-        <button className="btn btn-primary" type="submit">Salvar Credenciais</button>
+        <button className="btn btn-primary" type="submit">Salvar Configurações</button>
       </form>
     </div>
   );

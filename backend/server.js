@@ -77,6 +77,19 @@ class Deferred {
   }
 }
 
+function getTelegramCredentials(settings) {
+  if (settings.useCustomApi && settings.customApiId && settings.customApiHash) {
+    return {
+      apiId: Number(settings.customApiId),
+      apiHash: settings.customApiHash
+    };
+  }
+  return {
+    apiId: 31992404,
+    apiHash: '29d0d2dc1ac01f98aefed17f7e017edf'
+  };
+}
+
 // -------------------------------------------------------------
 // INICIALIZAÇÃO DE CONTAS SALVAS
 // -------------------------------------------------------------
@@ -90,10 +103,11 @@ async function initializeSavedAccounts() {
     if (acc.status === 'connected') {
       try {
         console.log(`[Telegram] Reconectando conta +${acc.phone}...`);
+        const creds = getTelegramCredentials(settings);
         const client = new TelegramClient(
           new StringSession(acc.session),
-          Number(settings.defaultApiId),
-          settings.defaultApiHash,
+          creds.apiId,
+          creds.apiHash,
           {
             connectionRetries: 3,
             autoReconnect: true,
@@ -443,8 +457,8 @@ app.get('/api/settings', requireAuth, async (req, res) => {
 });
 
 app.post('/api/settings', requireAuth, async (req, res) => {
-  const { defaultApiId, defaultApiHash } = req.body;
-  const saved = await db.saveSettings({ defaultApiId, defaultApiHash });
+  const { defaultApiId, defaultApiHash, useCustomApi, customApiId, customApiHash } = req.body;
+  const saved = await db.saveSettings({ defaultApiId, defaultApiHash, useCustomApi, customApiId, customApiHash });
   res.json(saved);
 });
 
@@ -590,7 +604,8 @@ app.post('/api/accounts/connect/phone/start', requireAuth, async (req, res) => {
   
   const sessionId = uuidv4();
   const stringSession = new StringSession("");
-  const client = new TelegramClient(stringSession, Number(settings.defaultApiId), settings.defaultApiHash, {
+  const creds = getTelegramCredentials(settings);
+  const client = new TelegramClient(stringSession, creds.apiId, creds.apiHash, {
     connectionRetries: 3,
     autoReconnect: true
   });
@@ -701,7 +716,8 @@ app.post('/api/accounts/connect/qr/start', requireAuth, async (req, res) => {
   const settings = await db.getSettings();
   const sessionId = uuidv4();
   const stringSession = new StringSession("");
-  const client = new TelegramClient(stringSession, Number(settings.defaultApiId), settings.defaultApiHash, {
+  const creds = getTelegramCredentials(settings);
+  const client = new TelegramClient(stringSession, creds.apiId, creds.apiHash, {
     connectionRetries: 3,
     autoReconnect: true
   });
@@ -726,7 +742,7 @@ app.post('/api/accounts/connect/qr/start', requireAuth, async (req, res) => {
     pendingConn.status = 'awaiting_scan';
     
     return client.signInUserWithQrCode(
-      { apiId: Number(settings.defaultApiId), apiHash: settings.defaultApiHash },
+      { apiId: creds.apiId, apiHash: creds.apiHash },
       {
         qrCode: async (code) => {
           pendingConn.status = 'awaiting_scan';

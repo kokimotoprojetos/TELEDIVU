@@ -12,8 +12,11 @@ const INITIAL_DATA = {
   logs: [],
   users: [],
   settings: {
-    defaultApiId: '22839958',
-    defaultApiHash: 'c66c303f2603cd71110023a7c640e34c'
+    defaultApiId: '31992404',
+    defaultApiHash: '29d0d2dc1ac01f98aefed17f7e017edf',
+    useCustomApi: false,
+    customApiId: '',
+    customApiHash: ''
   }
 };
 
@@ -89,8 +92,11 @@ const db = {
   getSettings: async () => {
     const data = await load();
     return {
-      defaultApiId: process.env.TELEGRAM_API_ID || data.settings.defaultApiId,
-      defaultApiHash: process.env.TELEGRAM_API_HASH || data.settings.defaultApiHash
+      defaultApiId: process.env.TELEGRAM_API_ID || data.settings.defaultApiId || '31992404',
+      defaultApiHash: process.env.TELEGRAM_API_HASH || data.settings.defaultApiHash || '29d0d2dc1ac01f98aefed17f7e017edf',
+      useCustomApi: !!data.settings.useCustomApi,
+      customApiId: data.settings.customApiId || '',
+      customApiHash: data.settings.customApiHash || ''
     };
   },
   saveSettings: async (settings) => {
@@ -98,8 +104,11 @@ const db = {
     data.settings = { ...data.settings, ...settings };
     await save();
     return {
-      defaultApiId: process.env.TELEGRAM_API_ID || data.settings.defaultApiId,
-      defaultApiHash: process.env.TELEGRAM_API_HASH || data.settings.defaultApiHash
+      defaultApiId: process.env.TELEGRAM_API_ID || data.settings.defaultApiId || '31992404',
+      defaultApiHash: process.env.TELEGRAM_API_HASH || data.settings.defaultApiHash || '29d0d2dc1ac01f98aefed17f7e017edf',
+      useCustomApi: !!data.settings.useCustomApi,
+      customApiId: data.settings.customApiId || '',
+      customApiHash: data.settings.customApiHash || ''
     };
   },
 

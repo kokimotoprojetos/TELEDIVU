@@ -552,49 +552,72 @@ app.get('/api/auth/me', requireAuth, async (req, res) => {
 // ROTAS DE CONFIGURAÇÕES E ESTATÍSTICAS
 // -------------------------------------------------------------
 app.get('/api/settings', requireAuth, async (req, res) => {
-  const settings = await db.getSettings();
-  res.json(settings);
+  try {
+    const settings = await db.getSettings();
+    res.json(settings);
+  } catch (err) {
+    console.error('[Settings] Erro ao buscar:', err.message);
+    res.status(500).json({ error: 'Erro ao carregar configurações.' });
+  }
 });
 
 app.post('/api/settings', requireAuth, async (req, res) => {
   const { defaultApiId, defaultApiHash, useCustomApi, customApiId, customApiHash } = req.body;
-  const saved = await db.saveSettings({ defaultApiId, defaultApiHash, useCustomApi, customApiId, customApiHash });
-  res.json(saved);
+  // Validação básica
+  if (useCustomApi && (!customApiId || !customApiHash)) {
+    return res.status(400).json({ error: 'API ID e API Hash personalizados são obrigatórios quando API Personalizada está ativa.' });
+  }
+  try {
+    const saved = await db.saveSettings({ defaultApiId, defaultApiHash, useCustomApi, customApiId, customApiHash });
+    res.json(saved);
+  } catch (err) {
+    console.error('[Settings] Erro ao salvar:', err.message);
+    res.status(500).json({ error: 'Erro ao salvar configurações.' });
+  }
 });
 
 app.get('/api/stats', requireAuth, async (req, res) => {
-  const userId = req.user.id;
-  const accounts = await db.getAccountsByUserId(userId);
-  const campaigns = await db.getCampaignsByUserId(userId);
-  const logs = await db.getLogsByUserId(userId);
-  
-  const connectedCount = accounts.filter(a => a.status === 'connected').length;
-  const activeCampaigns = campaigns.filter(c => c.status === 'active').length;
-  const totalSent = logs.filter(l => l.status === 'success' && l.campaignId !== 'system').length;
-  const totalFailed = logs.filter(l => l.status === 'failed').length;
-  
-  res.json({
-    totalAccounts: accounts.length,
-    connectedAccounts: connectedCount,
-    totalCampaigns: campaigns.length,
-    activeCampaigns,
-    totalSent,
-    totalFailed
-  });
+  try {
+    const userId = req.user.id;
+    const accounts = await db.getAccountsByUserId(userId);
+    const campaigns = await db.getCampaignsByUserId(userId);
+    const logs = await db.getLogsByUserId(userId);
+    
+    const connectedCount = accounts.filter(a => a.status === 'connected').length;
+    const activeCampaigns = campaigns.filter(c => c.status === 'active').length;
+    const totalSent = logs.filter(l => l.status === 'success' && l.campaignId !== 'system').length;
+    const totalFailed = logs.filter(l => l.status === 'failed').length;
+    
+    res.json({
+      totalAccounts: accounts.length,
+      connectedAccounts: connectedCount,
+      totalCampaigns: campaigns.length,
+      activeCampaigns,
+      totalSent,
+      totalFailed
+    });
+  } catch (err) {
+    console.error('[Stats] Erro ao calcular estatísticas:', err.message);
+    res.status(500).json({ error: 'Erro ao carregar estatísticas.' });
+  }
 });
 
 // -------------------------------------------------------------
 // ROTAS DE CONTAS DO TELEGRAM
 // -------------------------------------------------------------
 app.get('/api/accounts', requireAuth, async (req, res) => {
-  const userId = req.user.id;
-  const accounts = await db.getAccountsByUserId(userId);
-  // Retorna com status de ativação em memória atualizado
-  const mapped = accounts.map(acc => ({
-    ...acc,
-    isOnline: activeClients.has(cleanPhone(acc.phone))
-  }));
-  res.json(mapped);
+  try {
+    const userId = req.user.id;
+    const accounts = await db.getAccountsByUserId(userId);
+    const mapped = accounts.map(acc => ({
+      ...acc,
+      isOnline: activeClients.has(cleanPhone(acc.phone))
+    }));
+    res.json(mapped);
+  } catch (err) {
+    console.error('[Accounts] Erro ao listar contas:', err.message);
+    res.status(500).json({ error: 'Erro ao carregar contas.' });
+  }
 });
 
 app.delete('/api/accounts/:phone', requireAuth, async (req, res) => {
@@ -619,8 +642,9 @@ app.delete('/api/accounts/:phone', requireAuth, async (req, res) => {
   }
   
   await db.deleteAccount(phone);
-  res.json({ success: true, message: `Conta +${phone} desconectada e deletada.` });
+  res.json({ success: true, message: `Conta desconectada e removida com sucesso.` });
 });
+
 
 // Buscar todos os grupos, canais, chats de conversa e bots de uma conta ativa
 app.get('/api/accounts/:phone/groups', requireAuth, async (req, res) => {
@@ -687,8 +711,8 @@ app.get('/api/accounts/:phone/groups', requireAuth, async (req, res) => {
       
     res.json(groups);
   } catch (err) {
-    console.error(`[Groups] Erro ao buscar chats para +${phone}:`, err.message);
-    res.status(500).json({ error: `Erro ao carregar chats: ${err.message}` });
+    console.error(`[Groups] Erro ao buscar chats para uma conta:`, err.message); // Não vaza o telefone no log
+    res.status(500).json({ error: 'Erro ao carregar chats. Tente novamente.' }); // Não vaza detalhes internos
   }
 });
 
@@ -699,8 +723,14 @@ app.post('/api/accounts/connect/phone/start', requireAuth, async (req, res) => {
   const { phone } = req.body;
   if (!phone) return res.status(400).json({ error: 'Número de telefone é obrigatório.' });
   
+  // Validar formato mínimo do telefone
+  const cleanedPhone = phone.replace(/[^\d+]/g, '');
+  if (cleanedPhone.replace(/\+/g, '').length < 8) {
+    return res.status(400).json({ error: 'Número de telefone inválido.' });
+  }
+
   const settings = await db.getSettings();
-  const cleanPhone = phone.replace(/[^\d+]/g, ''); // mantém apenas números e +
+  // CORRIGIDO: renomeado de cleanPhone para cleanedPhone para não sombrear a função global
   
   const sessionId = uuidv4();
   const stringSession = new StringSession("");
@@ -714,9 +744,9 @@ app.post('/api/accounts/connect/phone/start', requireAuth, async (req, res) => {
     sessionId,
     type: 'phone',
     client,
-    phone: cleanPhone,
+    phone: cleanedPhone,
     status: 'connecting',
-    userId: req.user.id, // Vínculo com o usuário logado
+    userId: req.user.id,
     phoneCodeDeferred: new Deferred(),
     passwordDeferred: new Deferred(),
     error: null
@@ -771,11 +801,8 @@ app.post('/api/accounts/connect/phone/start', requireAuth, async (req, res) => {
     activeClients.set(cleanPhone(me.phone), client);
     console.log(`[Auth Phone] Conta +${me.phone} autenticada com sucesso!`);
     
-    // M8: Limpa a conexão pendente após 5 minutos (com disconnect seguro)
-    setTimeout(async () => {
-      try { await client.disconnect(); } catch(e) {}
-      pendingConnections.delete(sessionId);
-    }, 5 * 60 * 1000);
+    // Limpa a conexão pendente imediatamente (já está ativa no activeClients)
+    pendingConnections.delete(sessionId);
   }).catch(err => {
     console.error(`[Auth Phone Catch Error]:`, err.message);
     pendingConn.status = 'error';
@@ -798,7 +825,12 @@ app.post('/api/accounts/connect/phone/submit-code', requireAuth, async (req, res
   if (conn.userId !== req.user.id) return res.status(403).json({ error: 'Acesso negado.' });
   if (conn.status !== 'awaiting_code') return res.status(400).json({ error: 'A conexão não está aguardando código no momento.' });
   
-  conn.phoneCodeDeferred.resolve(code);
+  // Validar código SMS
+  if (!code || typeof code !== 'string' || code.trim().length === 0) {
+    return res.status(400).json({ error: 'Código de verificação é obrigatório.' });
+  }
+
+  conn.phoneCodeDeferred.resolve(code.trim());
   res.json({ success: true, message: 'Código recebido pelo servidor, processando...' });
 });
 
@@ -811,6 +843,11 @@ app.post('/api/accounts/connect/phone/submit-password', requireAuth, async (req,
   if (conn.userId !== req.user.id) return res.status(403).json({ error: 'Acesso negado.' });
   if (conn.status !== 'awaiting_password') return res.status(400).json({ error: 'A conexão não está aguardando senha 2FA no momento.' });
   
+  // Validar senha 2FA
+  if (!password || typeof password !== 'string' || password.length === 0) {
+    return res.status(400).json({ error: 'Senha 2FA é obrigatória.' });
+  }
+
   conn.passwordDeferred.resolve(password);
   res.json({ success: true, message: 'Senha 2FA recebida pelo servidor, processando...' });
 });
@@ -906,11 +943,8 @@ app.post('/api/accounts/connect/qr/start', requireAuth, async (req, res) => {
     activeClients.set(cleanPhone(me.phone), client);
     console.log(`[Auth QR] Conta +${me.phone} autenticada via QR com sucesso!`);
     
-    // M8: Limpa a conexão pendente após 5 minutos (com disconnect seguro)
-    setTimeout(async () => {
-      try { await client.disconnect(); } catch(e) {}
-      pendingConnections.delete(sessionId);
-    }, 5 * 60 * 1000);
+    // Limpa a conexão pendente imediatamente (já está ativa no activeClients)
+    pendingConnections.delete(sessionId);
   }).catch(err => {
     console.error(`[Auth QR Catch Error]:`, err.message);
     pendingConn.status = 'error';
@@ -1068,13 +1102,23 @@ app.post('/api/campaigns/:id/toggle', requireAuth, async (req, res) => {
 // ROTAS DE LOGS
 // -------------------------------------------------------------
 app.get('/api/logs', requireAuth, async (req, res) => {
-  const logs = await db.getLogsByUserId(req.user.id);
-  res.json(logs);
+  try {
+    const logs = await db.getLogsByUserId(req.user.id);
+    res.json(logs);
+  } catch (err) {
+    console.error('[Logs] Erro ao listar:', err.message);
+    res.status(500).json({ error: 'Erro ao carregar logs.' });
+  }
 });
 
 app.post('/api/logs/clear', requireAuth, async (req, res) => {
-  await db.clearLogsByUserId(req.user.id);
-  res.json({ success: true });
+  try {
+    await db.clearLogsByUserId(req.user.id);
+    res.json({ success: true });
+  } catch (err) {
+    console.error('[Logs] Erro ao limpar:', err.message);
+    res.status(500).json({ error: 'Erro ao limpar logs.' });
+  }
 });
 
 // Servir frontend React em produção (fallback para SPA React Router)

@@ -149,16 +149,19 @@ const db = {
   },
   saveSettings: async (settings) => {
     const data = await load();
+    // Merge apenas campos permitidos (não sobrescrever defaultApiId/Hash das env vars)
     data.settings = { ...data.settings, ...settings };
     await save();
+    // CORRIGIDO (7ª passagem): retorno consistente com getSettings() — não expor hash padrão
     return {
-      defaultApiId: process.env.TELEGRAM_API_ID || data.settings.defaultApiId || '31992404',
-      defaultApiHash: process.env.TELEGRAM_API_HASH || data.settings.defaultApiHash || '29d0d2dc1ac01f98aefed17f7e017edf',
+      defaultApiId: data.settings.defaultApiId || '',
+      defaultApiHash: '', // nunca retornar o hash padrão via API
       useCustomApi: !!data.settings.useCustomApi,
       customApiId: data.settings.customApiId || '',
       customApiHash: data.settings.customApiHash || ''
     };
   },
+
 
   // Contas
   getAccounts: async () => {

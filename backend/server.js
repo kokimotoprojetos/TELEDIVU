@@ -263,14 +263,20 @@ async function parseMessage(client, target, messageTemplate, accountPhone) {
   parsed = parsed.replace(/{random_emoji}/g, randomEmoji);
   parsed = parsed.replace(/{account_phone}/g, `+${accountPhone}`);
 
+  // CORRIGIDO (7ª passagem): O template usa String.replace() que é vulnerável a
+  // injeção de template se o dado da entidade Telegram contiver {first_name} etc.
+  // Ex: se um contato tiver firstName='Olá {first_name}', a substituição seria recursiva.
+  // Solução: sanitizar os valores ANTES de substituí-los, removendo tokens de template.
+  const sanitizeTemplateValue = (val) => String(val || '').replace(/\{[a-z_]+\}/g, '');
+
   try {
     // Tenta carregar informações da entidade destino para personalização
     const entity = await client.getEntity(target);
     if (entity) {
-      const firstName = entity.firstName || entity.title || 'Membro';
-      const lastName = entity.lastName || '';
-      const username = entity.username ? `@${entity.username}` : 'Membro';
-      const chatTitle = entity.title || entity.firstName || 'Chat';
+      const firstName = sanitizeTemplateValue(entity.firstName || entity.title || 'Membro');
+      const lastName = sanitizeTemplateValue(entity.lastName || '');
+      const username = entity.username ? `@${sanitizeTemplateValue(entity.username)}` : 'Membro';
+      const chatTitle = sanitizeTemplateValue(entity.title || entity.firstName || 'Chat');
       
       parsed = parsed.replace(/{first_name}/g, firstName);
       parsed = parsed.replace(/{last_name}/g, lastName);
@@ -281,7 +287,7 @@ async function parseMessage(client, target, messageTemplate, accountPhone) {
     // Em caso de falha (ex: rate limit ou username inválido), substitui por fallbacks básicos
     parsed = parsed.replace(/{first_name}/g, 'Amigo(a)');
     parsed = parsed.replace(/{last_name}/g, '');
-    parsed = parsed.replace(/{username}/g, target);
+    parsed = parsed.replace(/{username}/g, sanitizeTemplateValue(target));
     parsed = parsed.replace(/{chat_title}/g, 'Grupo');
   }
   
@@ -534,8 +540,19 @@ app.post('/api/auth/register', authLimiter, async (req, res) => {
   if (!username || typeof username !== 'string' || username.trim().length < 3) {
     return res.status(400).json({ error: 'Usuário deve ter pelo menos 3 caracteres.' });
   }
+  // CORRIGIDO (7ª passagem): adicionar limite máximo de tamanho para evitar DoS e overflow no banco
+  if (username.trim().length > 30) {
+    return res.status(400).json({ error: 'Usuário não pode ter mais de 30 caracteres.' });
+  }
+  // Permitir apenas caracteres alfanuméricos e underscores (sem injection)
+  if (!/^[a-zA-Z0-9_]+$/.test(username.trim())) {
+    return res.status(400).json({ error: 'Usuário deve conter apenas letras, números e underscore.' });
+  }
   if (!password || typeof password !== 'string' || password.length < 6) {
     return res.status(400).json({ error: 'Senha deve ter pelo menos 6 caracteres.' });
+  }
+  if (password.length > 128) {
+    return res.status(400).json({ error: 'Senha muito longa (máximo 128 caracteres).' });
   }
 
   try {
@@ -607,13 +624,20 @@ app.get('/api/settings', requireAuth, async (req, res) => {
 });
 
 app.post('/api/settings', requireAuth, async (req, res) => {
-  const { defaultApiId, defaultApiHash, useCustomApi, customApiId, customApiHash } = req.body;
-  // Validação básica
+  const { useCustomApi, customApiId, customApiHash } = req.body;
+  // CORRIGIDO (7ª passagem): defaultApiId e defaultApiHash não devem ser aceitos do frontend.
+  // Essas credenciais são definidas via variáveis de ambiente. Aceitar do corpo permitiria
+  // que usuários sobrescrevessem as credenciais do servidor com as deles.
   if (useCustomApi && (!customApiId || !customApiHash)) {
     return res.status(400).json({ error: 'API ID e API Hash personalizados são obrigatórios quando API Personalizada está ativa.' });
   }
+  // Validar que customApiId e numérico se fornecido
+  if (customApiId && (isNaN(Number(customApiId)) || Number(customApiId) <= 0)) {
+    return res.status(400).json({ error: 'API ID personalizado deve ser um número válido.' });
+  }
   try {
-    const saved = await db.saveSettings({ defaultApiId, defaultApiHash, useCustomApi, customApiId, customApiHash });
+    // Salva apenas os campos permitidos (não defaultApiId/Hash)
+    const saved = await db.saveSettings({ useCustomApi, customApiId: customApiId || '', customApiHash: customApiHash || '' });
     res.json(saved);
   } catch (err) {
     console.error('[Settings] Erro ao salvar:', err.message);
@@ -1081,8 +1105,15 @@ app.post('/api/campaigns', requireAuth, async (req, res) => {
   if (!name || typeof name !== 'string' || name.trim().length === 0) {
     return res.status(400).json({ error: 'Nome da campanha é obrigatório.' });
   }
+  // CORRIGIDO (7ª passagem): limites máximos para prevenir DoS via payloads gigantes
+  if (name.trim().length > 100) {
+    return res.status(400).json({ error: 'Nome da campanha não pode ter mais de 100 caracteres.' });
+  }
   if (!targetsText || typeof targetsText !== 'string') {
     return res.status(400).json({ error: 'Lista de alvos é obrigatória.' });
+  }
+  if (targetsText.length > 50000) { // ~1000 targets de 50 chars cada
+    return res.status(400).json({ error: 'Lista de alvos muito longa (máximo 50.000 caracteres / ~1000 alvos).' });
   }
   if (!message || typeof message !== 'string' || message.trim().length === 0) {
     return res.status(400).json({ error: 'Mensagem da campanha é obrigatória.' });

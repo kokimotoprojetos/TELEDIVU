@@ -341,7 +341,11 @@ const db = {
       try {
         const { data, error } = await supabase.from('logs').select('*').order('timestamp', { ascending: false });
         if (error) throw error;
-        return data || [];
+        return (data || []).map(l => ({
+          ...l,
+          accountPhone: l.phone || 'Sistema',
+          target: l.group || 'Sistema'
+        }));
       } catch (err) {
         console.error('[Supabase] Erro ao buscar logs:', err.message);
       }
@@ -352,10 +356,18 @@ const db = {
   addLog: async (log) => {
     const id = Math.random().toString(36).substr(2, 9);
     const timestamp = new Date().toISOString();
+    
+    const phoneValue = log.phone || log.accountPhone || 'Sistema';
+    const groupValue = log.group || log.target || 'Sistema';
+    
     const newLog = {
       id,
       timestamp,
-      ...log
+      ...log,
+      phone: phoneValue,
+      group: groupValue,
+      accountPhone: phoneValue,
+      target: groupValue
     };
 
     if (supabase) {
@@ -364,15 +376,19 @@ const db = {
           id: newLog.id,
           userId: newLog.userId,
           campaignId: newLog.campaignId,
-          phone: newLog.phone,
-          group: newLog.group,
+          phone: phoneValue,
+          group: groupValue,
           status: newLog.status,
-          message: newLog.message,
+          message: newLog.message || '',
           error: newLog.error,
           timestamp: newLog.timestamp
         }).select().single();
         if (error) throw error;
-        return data;
+        return {
+          ...data,
+          accountPhone: data.phone,
+          target: data.group
+        };
       } catch (err) {
         console.error('[Supabase] Erro ao adicionar log:', err.message);
       }
@@ -515,7 +531,11 @@ const db = {
       try {
         const { data, error } = await supabase.from('logs').select('*').eq('userId', userId).order('timestamp', { ascending: false });
         if (error) throw error;
-        return data || [];
+        return (data || []).map(l => ({
+          ...l,
+          accountPhone: l.phone || 'Sistema',
+          target: l.group || 'Sistema'
+        }));
       } catch (err) {
         console.error('[Supabase] Erro ao buscar logs por usuário:', err.message);
       }

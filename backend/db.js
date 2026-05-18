@@ -234,7 +234,7 @@ const db = {
   getCampaigns: async () => {
     if (supabase) {
       try {
-        const { data, error } = await supabase.from('campaigns').select('*');
+        const { data, error } = await supabase.from('campaigns').select('*').order('createdAt', { ascending: true });
         if (error) throw error;
         return (data || []).map(deserializeCampaign);
       } catch (err) {
@@ -242,7 +242,7 @@ const db = {
       }
     }
     const data = await load();
-    return data.campaigns;
+    return (data.campaigns || []).sort((a, b) => new Date(a.createdAt) - new Date(b.createdAt));
   },
   getCampaignById: async (id) => {
     if (supabase) {
@@ -517,7 +517,7 @@ const db = {
   getCampaignsByUserId: async (userId) => {
     if (supabase) {
       try {
-        const { data, error } = await supabase.from('campaigns').select('*').eq('userId', userId);
+        const { data, error } = await supabase.from('campaigns').select('*').eq('userId', userId).order('createdAt', { ascending: true });
         if (error) throw error;
         return (data || []).map(deserializeCampaign);
       } catch (err) {
@@ -525,7 +525,9 @@ const db = {
       }
     }
     const data = await load();
-    return (data.campaigns || []).filter(c => c.userId === userId);
+    return (data.campaigns || [])
+      .filter(c => c.userId === userId)
+      .sort((a, b) => new Date(a.createdAt) - new Date(b.createdAt));
   },
   getLogsByUserId: async (userId) => {
     if (supabase) {

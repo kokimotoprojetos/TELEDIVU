@@ -190,7 +190,12 @@ const db = {
       try {
         const { data, error } = await supabase.from('campaigns').select('*');
         if (error) throw error;
-        return data || [];
+        return (data || []).map(c => ({
+          ...c,
+          targets: c.groups || [],
+          targetsText: (c.groups || []).join('\n'),
+          delay: c.interval || 60
+        }));
       } catch (err) {
         console.error('[Supabase] Erro ao buscar campanhas:', err.message);
       }
@@ -203,7 +208,13 @@ const db = {
       try {
         const { data, error } = await supabase.from('campaigns').select('*').eq('id', id).maybeSingle();
         if (error) throw error;
-        return data || null;
+        if (!data) return null;
+        return {
+          ...data,
+          targets: data.groups || [],
+          targetsText: (data.groups || []).join('\n'),
+          delay: data.interval || 60
+        };
       } catch (err) {
         console.error('[Supabase] Erro ao buscar campanha por ID:', err.message);
       }
@@ -214,20 +225,28 @@ const db = {
   saveCampaign: async (campaign) => {
     if (supabase) {
       try {
+        const intervalValue = Number(campaign.interval || campaign.delay || 60);
+        const groupsValue = campaign.groups || campaign.targets || [];
         const { data, error } = await supabase.from('campaigns').upsert({
           id: campaign.id,
           name: campaign.name,
           userId: campaign.userId,
           status: campaign.status,
           message: campaign.message,
-          interval: campaign.interval,
-          groups: typeof campaign.groups === 'string' ? JSON.parse(campaign.groups) : campaign.groups,
+          interval: intervalValue,
+          groups: typeof groupsValue === 'string' ? JSON.parse(groupsValue) : groupsValue,
           accounts: typeof campaign.accounts === 'string' ? JSON.parse(campaign.accounts) : campaign.accounts,
           createdAt: campaign.createdAt || new Date().toISOString(),
           lastRun: campaign.lastRun
         }).select().single();
         if (error) throw error;
-        return data;
+        if (!data) return null;
+        return {
+          ...data,
+          targets: data.groups || [],
+          targetsText: (data.groups || []).join('\n'),
+          delay: data.interval || 60
+        };
       } catch (err) {
         console.error('[Supabase] Erro ao salvar campanha:', err.message);
       }
@@ -424,7 +443,12 @@ const db = {
       try {
         const { data, error } = await supabase.from('campaigns').select('*').eq('userId', userId);
         if (error) throw error;
-        return data || [];
+        return (data || []).map(c => ({
+          ...c,
+          targets: c.groups || [],
+          targetsText: (c.groups || []).join('\n'),
+          delay: c.interval || 60
+        }));
       } catch (err) {
         console.error('[Supabase] Erro ao buscar campanhas por usuário:', err.message);
       }

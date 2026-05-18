@@ -87,6 +87,52 @@ if (supabaseUrl && supabaseKey && !supabaseUrl.includes('sua-url-do-supabase')) 
   console.warn('[Supabase] Credenciais ausentes ou não configuradas em .env. Usando db.json local como fallback.');
 }
 
+function deserializeCampaign(c) {
+  if (!c) return null;
+  let text = c.message || '';
+  let image = null;
+  let loop = false;
+  let randomDelay = 0;
+  let sentCount = 0;
+  let failedCount = 0;
+  let currentTargetIndex = 0;
+  let nextSendAt = null;
+  
+  if (c.message && c.message.startsWith('{') && c.message.endsWith('}')) {
+    try {
+      const parsed = JSON.parse(c.message);
+      text = parsed.text || '';
+      image = parsed.image || null;
+      loop = parsed.loop !== undefined ? !!parsed.loop : false;
+      randomDelay = parsed.randomDelay !== undefined ? Number(parsed.randomDelay) : 0;
+      sentCount = parsed.sentCount !== undefined ? Number(parsed.sentCount) : 0;
+      failedCount = parsed.failedCount !== undefined ? Number(parsed.failedCount) : 0;
+      currentTargetIndex = parsed.currentTargetIndex !== undefined ? Number(parsed.currentTargetIndex) : 0;
+      nextSendAt = parsed.nextSendAt !== undefined ? parsed.nextSendAt : null;
+    } catch (e) {
+      // mantém como texto plano
+    }
+  }
+  
+  const groupsList = c.groups || [];
+  
+  return {
+    ...c,
+    message: c.message,
+    textMessage: text,
+    image: image,
+    loop: loop,
+    randomDelay: randomDelay,
+    sentCount: sentCount,
+    failedCount: failedCount,
+    currentTargetIndex: currentTargetIndex,
+    nextSendAt: nextSendAt,
+    targets: groupsList,
+    targetsText: groupsList.join('\n'),
+    delay: c.interval || 60
+  };
+}
+
 const db = {
   // Configurações
   getSettings: async () => {
@@ -190,12 +236,7 @@ const db = {
       try {
         const { data, error } = await supabase.from('campaigns').select('*');
         if (error) throw error;
-        return (data || []).map(c => ({
-          ...c,
-          targets: c.groups || [],
-          targetsText: (c.groups || []).join('\n'),
-          delay: c.interval || 60
-        }));
+        return (data || []).map(deserializeCampaign);
       } catch (err) {
         console.error('[Supabase] Erro ao buscar campanhas:', err.message);
       }
@@ -208,13 +249,7 @@ const db = {
       try {
         const { data, error } = await supabase.from('campaigns').select('*').eq('id', id).maybeSingle();
         if (error) throw error;
-        if (!data) return null;
-        return {
-          ...data,
-          targets: data.groups || [],
-          targetsText: (data.groups || []).join('\n'),
-          delay: data.interval || 60
-        };
+        return deserializeCampaign(data);
       } catch (err) {
         console.error('[Supabase] Erro ao buscar campanha por ID:', err.message);
       }
@@ -227,12 +262,42 @@ const db = {
       try {
         const intervalValue = Number(campaign.interval || campaign.delay || 60);
         const groupsValue = campaign.groups || campaign.targets || [];
+        
+        let msgObj = {
+          text: campaign.message || '',
+          image: campaign.image || null,
+          loop: !!campaign.loop,
+          randomDelay: Number(campaign.randomDelay || 0),
+          sentCount: Number(campaign.sentCount || 0),
+          failedCount: Number(campaign.failedCount || 0),
+          currentTargetIndex: Number(campaign.currentTargetIndex || 0),
+          nextSendAt: campaign.nextSendAt || null
+        };
+        
+        if (campaign.message && campaign.message.startsWith('{') && campaign.message.endsWith('}')) {
+          try {
+            const parsedMsg = JSON.parse(campaign.message);
+            msgObj.text = parsedMsg.text || msgObj.text;
+            msgObj.image = parsedMsg.image || msgObj.image;
+            if (parsedMsg.loop !== undefined) msgObj.loop = !!parsedMsg.loop;
+            if (parsedMsg.randomDelay !== undefined) msgObj.randomDelay = Number(parsedMsg.randomDelay);
+            if (parsedMsg.sentCount !== undefined) msgObj.sentCount = Number(parsedMsg.sentCount);
+            if (parsedMsg.failedCount !== undefined) msgObj.failedCount = Number(parsedMsg.failedCount);
+            if (parsedMsg.currentTargetIndex !== undefined) msgObj.currentTargetIndex = Number(parsedMsg.currentTargetIndex);
+            if (parsedMsg.nextSendAt !== undefined) msgObj.nextSendAt = parsedMsg.nextSendAt;
+          } catch (e) {
+            // mantém texto
+          }
+        }
+        
+        const serializedMessage = JSON.stringify(msgObj);
+        
         const { data, error } = await supabase.from('campaigns').upsert({
           id: campaign.id,
           name: campaign.name,
           userId: campaign.userId,
           status: campaign.status,
-          message: campaign.message,
+          message: serializedMessage,
           interval: intervalValue,
           groups: typeof groupsValue === 'string' ? JSON.parse(groupsValue) : groupsValue,
           accounts: typeof campaign.accounts === 'string' ? JSON.parse(campaign.accounts) : campaign.accounts,
@@ -240,13 +305,7 @@ const db = {
           lastRun: campaign.lastRun
         }).select().single();
         if (error) throw error;
-        if (!data) return null;
-        return {
-          ...data,
-          targets: data.groups || [],
-          targetsText: (data.groups || []).join('\n'),
-          delay: data.interval || 60
-        };
+        return deserializeCampaign(data);
       } catch (err) {
         console.error('[Supabase] Erro ao salvar campanha:', err.message);
       }
@@ -443,12 +502,7 @@ const db = {
       try {
         const { data, error } = await supabase.from('campaigns').select('*').eq('userId', userId);
         if (error) throw error;
-        return (data || []).map(c => ({
-          ...c,
-          targets: c.groups || [],
-          targetsText: (c.groups || []).join('\n'),
-          delay: c.interval || 60
-        }));
+        return (data || []).map(deserializeCampaign);
       } catch (err) {
         console.error('[Supabase] Erro ao buscar campanhas por usuário:', err.message);
       }

@@ -975,9 +975,14 @@ app.post('/api/accounts/connect/qr/start', requireAuth, async (req, res) => {
   res.json({ sessionId, status: 'connecting' });
 });
 
-// Consulta de status de conexões pendentes (Tanto QR quanto Telefone utilizam esta rota!)
-app.get('/api/accounts/connect/status', requireAuth, async (req, res) => {
-  const { sessionId } = req.query;
+// Consulta de status de conexões pendentes — POST para não expor sessionId nos logs de acesso
+app.post('/api/accounts/connect/status', requireAuth, async (req, res) => {
+  const { sessionId } = req.body;
+
+  if (!sessionId || typeof sessionId !== 'string') {
+    return res.status(400).json({ error: 'sessionId é obrigatório.' });
+  }
+
   const conn = pendingConnections.get(sessionId);
   
   if (!conn) {
@@ -992,10 +997,12 @@ app.get('/api/accounts/connect/status', requireAuth, async (req, res) => {
     status: conn.status,
     type: conn.type,
     phone: conn.phone,
-    qrImage: conn.qrImage, // apenas para login QR
+    qrImage: conn.qrImage,
     error: conn.error
   });
 });
+
+
 
 // -------------------------------------------------------------
 // ROTAS DE CAMPANHAS DE AUTOMACÃO

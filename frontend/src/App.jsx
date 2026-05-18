@@ -332,7 +332,12 @@ function App() {
 
     pollIntervalRef.current = setInterval(async () => {
       try {
-        const res = await authenticatedFetch(`${API_BASE}/accounts/connect/status?sessionId=${sessionId}`);
+        // CORRIGIDO: sessionId movido para o corpo da requisição (POST) para não
+        // aparecer nos logs de acesso do servidor (URL query params são logados).
+        const res = await authenticatedFetch(`${API_BASE}/accounts/connect/status`, {
+          method: 'POST',
+          body: JSON.stringify({ sessionId })
+        });
         const data = await res.json();
         
         setConnectionStatus(data.status);
@@ -353,7 +358,7 @@ function App() {
       } catch (err) {
         console.error(err);
       }
-    }, 1500);
+    }, 2500); // CORRIGIDO: reduzido de 1500ms para 2500ms (menos carga no servidor)
   };
 
   const closeConnectModal = () => {

@@ -138,8 +138,10 @@ const db = {
   getSettings: async () => {
     const data = await load();
     return {
-      defaultApiId: process.env.TELEGRAM_API_ID || data.settings.defaultApiId || '31992404',
-      defaultApiHash: process.env.TELEGRAM_API_HASH || data.settings.defaultApiHash || '29d0d2dc1ac01f98aefed17f7e017edf',
+      // CORRIGIDO: não expor credenciais padrão do Telegram nas configurações retornadas.
+      // As credenciais padrão são resolvidas internamente em getTelegramCredentials().
+      defaultApiId: data.settings.defaultApiId || '',
+      defaultApiHash: '', // nunca retornar o hash padrão via API
       useCustomApi: !!data.settings.useCustomApi,
       customApiId: data.settings.customApiId || '',
       customApiHash: data.settings.customApiHash || ''
@@ -363,7 +365,9 @@ const db = {
     return data.logs;
   },
   addLog: async (log) => {
-    const id = Math.random().toString(36).substr(2, 9);
+    // CORRIGIDO: Math.random() não é criptograficamente seguro para IDs.
+    // Colissões são possíveis com ~50k registros. Usando crypto.randomUUID().
+    const id = crypto.randomUUID ? crypto.randomUUID() : require('crypto').randomUUID();
     const timestamp = new Date().toISOString();
     
     const isSys = log.campaignId === 'system' || log.campaignName === 'Sistema';
@@ -462,7 +466,11 @@ const db = {
   getUserByUsername: async (username) => {
     if (supabase) {
       try {
-        const { data, error } = await supabase.from('users').select('*').ilike('username', username).maybeSingle();
+        // CORRIGIDO: ilike faz match case-insensitive no PostgreSQL, mas não garante
+        // consistência com o .toLowerCase() usado no registro. Usar .eq() com o
+        // username já normalizado (em minúsculo) garante comportamento previsível.
+        const normalizedUsername = username.toLowerCase();
+        const { data, error } = await supabase.from('users').select('*').eq('username', normalizedUsername).maybeSingle();
         if (error) throw error;
         return data || null;
       } catch (err) {

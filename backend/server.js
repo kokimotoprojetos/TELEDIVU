@@ -191,26 +191,149 @@ async function parseMessage(client, target, messageTemplate, accountPhone) {
   return parsed;
 }
 
+let isSchedulerRunning = false;
+
 async function runScheduler() {
-  const campaigns = await db.getCampaigns();
+  if (isSchedulerRunning) {
+    console.log('[Agendador] Execução anterior ainda em andamento. Pulando esta rodada...');
+    return;
+  }
+  isSchedulerRunning = true;
   
-  for (const cmp of campaigns) {
-    if (cmp.status !== 'active') continue;
+  try {
+    const campaigns = await db.getCampaigns();
     
-    const now = new Date();
-    const nextSend = cmp.nextSendAt ? new Date(cmp.nextSendAt) : null;
-    
-    // Verifica se já passou a hora do próximo envio
-    if (!nextSend || now >= nextSend) {
-      const targets = cmp.targets || [];
-      const currentIdx = cmp.currentTargetIndex || 0;
+    for (const cmp of campaigns) {
+      if (cmp.status !== 'active') continue;
       
-      // Se já percorremos todos os alvos
-      if (currentIdx >= targets.length) {
-        if (cmp.loop) {
-          cmp.currentTargetIndex = 0;
+      const now = new Date();
+      const nextSend = cmp.nextSendAt ? new Date(cmp.nextSendAt) : null;
+      
+      // Verifica se já passou a hora do próximo envio
+      if (!nextSend || now >= nextSend) {
+        const targets = cmp.targets || [];
+        const currentIdx = cmp.currentTargetIndex || 0;
+        
+        // Se já percorremos todos os alvos
+        if (currentIdx >= targets.length) {
+          if (cmp.loop) {
+            cmp.currentTargetIndex = 0;
+            
+            // Calcula o delay para reiniciar a campanha
+            const baseDelayMin = Number(cmp.delay || 1);
+            const randomDelayMin = Number(cmp.randomDelay || 0);
+            const actualDelayMin = baseDelayMin + (Math.random() * randomDelayMin);
+            const finalDelay = Math.max(10000, actualDelayMin * 60 * 1000); // mínimo de 10s de segurança
+            
+            cmp.nextSendAt = new Date(Date.now() + finalDelay).toISOString();
+            await db.saveCampaign(cmp);
+            await db.addLog({
+              campaignId: cmp.id,
+              campaignName: cmp.name,
+              accountPhone: 'Sistema',
+              target: 'Sistema',
+              status: 'success',
+              error: 'Todos os alvos contatados. Opção LOOP ativa: reiniciando fila de envios a partir do primeiro alvo.',
+              userId: cmp.userId
+            });
+            continue;
+          } else {
+            cmp.status = 'completed';
+            cmp.nextSendAt = null;
+            await db.saveCampaign(cmp);
+            await db.addLog({
+              campaignId: cmp.id,
+              campaignName: cmp.name,
+              accountPhone: 'Sistema',
+              target: 'Todos',
+              status: 'success',
+              error: 'Campanha finalizada. Todos os alvos foram contatados!',
+              userId: cmp.userId
+            });
+            continue;
+          }
+        }
+        
+        const target = targets[currentIdx];
+        
+        // Sistema de Round-Robin para selecionar a conta de envio
+        const campaignAccounts = cmp.accounts || [];
+        let clientToUse = null;
+        let phoneToUse = null;
+        
+        for (const phone of campaignAccounts) {
+          const cleanedPhone = cleanPhone(phone);
+          if (activeClients.has(cleanedPhone)) {
+            clientToUse = activeClients.get(cleanedPhone);
+            phoneToUse = phone;
+            // Rotaciona a conta: remove a conta usada e joga pro final do array da campanha
+            // para o próximo disparo usar outra conta
+            const index = campaignAccounts.indexOf(phone);
+            if (index > -1) {
+              campaignAccounts.splice(index, 1);
+              campaignAccounts.push(phone);
+              cmp.accounts = campaignAccounts;
+            }
+            break;
+          }
+        }
+        
+        if (!clientToUse) {
+          console.warn(`[Agendador] Nenhuma conta conectada disponível para a campanha "${cmp.name}".`);
+          cmp.status = 'paused';
+          await db.saveCampaign(cmp);
+          await db.addLog({
+            campaignId: cmp.id,
+            campaignName: cmp.name,
+            accountPhone: 'Sistema',
+            target: target,
+            status: 'failed',
+            error: 'Campanha pausada: nenhuma das contas selecionadas está conectada no momento.',
+            userId: cmp.userId
+          });
+          continue;
+        }
+        
+        // Envia a mensagem
+        try {
+          console.log(`[Agendador] Disparando para ${target} usando conta +${phoneToUse}...`);
           
-          // Calcula o delay para reiniciar a campanha
+          let rawMessage = cmp.message;
+          let mediaBase64 = null;
+          
+          if (rawMessage && rawMessage.startsWith('{') && rawMessage.endsWith('}')) {
+            try {
+              const parsed = JSON.parse(rawMessage);
+              rawMessage = parsed.text || '';
+              mediaBase64 = parsed.image || null;
+            } catch (e) {
+              // Se falhar o parse, mantém a mensagem como texto puro
+            }
+          }
+          
+          // Personaliza a mensagem
+          const messageToSend = await parseMessage(clientToUse, target, rawMessage, phoneToUse);
+          
+          // Dispara no Telegram (com imagem ou texto plano)
+          if (mediaBase64) {
+            const base64Data = mediaBase64.replace(/^data:image\/\w+;base64,/, "");
+            const fileBuffer = Buffer.from(base64Data, 'base64');
+            fileBuffer.name = 'image.png'; // Identificador para a biblioteca GramJS
+            
+            await clientToUse.sendFile(target, {
+              file: fileBuffer,
+              caption: messageToSend,
+              forceDocument: false
+            });
+          } else {
+            await clientToUse.sendMessage(target, { message: messageToSend });
+          }
+          
+          // Atualiza estatísticas de sucesso
+          cmp.sentCount = (cmp.sentCount || 0) + 1;
+          cmp.currentTargetIndex = currentIdx + 1;
+          
+          // Calcula próximo envio com delay + variação humana em MINUTOS
           const baseDelayMin = Number(cmp.delay || 1);
           const randomDelayMin = Number(cmp.randomDelay || 0);
           const actualDelayMin = baseDelayMin + (Math.random() * randomDelayMin);
@@ -218,177 +341,68 @@ async function runScheduler() {
           
           cmp.nextSendAt = new Date(Date.now() + finalDelay).toISOString();
           await db.saveCampaign(cmp);
-          await db.addLog({
-            campaignId: cmp.id,
-            campaignName: cmp.name,
-            accountPhone: 'Sistema',
-            target: 'Sistema',
-            status: 'success',
-            error: 'Todos os alvos contatados. Opção LOOP ativa: reiniciando fila de envios a partir do primeiro alvo.',
-            userId: cmp.userId
-          });
-          continue;
-        } else {
-          cmp.status = 'completed';
-          cmp.nextSendAt = null;
-          await db.saveCampaign(cmp);
-          await db.addLog({
-            campaignId: cmp.id,
-            campaignName: cmp.name,
-            accountPhone: 'Sistema',
-            target: 'Todos',
-            status: 'success',
-            error: 'Campanha finalizada. Todos os alvos foram contatados!',
-            userId: cmp.userId
-          });
-          continue;
-        }
-      }
-      
-      const target = targets[currentIdx];
-      
-      // Sistema de Round-Robin para selecionar a conta de envio
-      const campaignAccounts = cmp.accounts || [];
-      let clientToUse = null;
-      let phoneToUse = null;
-      
-      for (const phone of campaignAccounts) {
-        const cleanedPhone = cleanPhone(phone);
-        if (activeClients.has(cleanedPhone)) {
-          clientToUse = activeClients.get(cleanedPhone);
-          phoneToUse = phone;
-          // Rotaciona a conta: remove a conta usada e joga pro final do array da campanha
-          // para o próximo disparo usar outra conta
-          const index = campaignAccounts.indexOf(phone);
-          if (index > -1) {
-            campaignAccounts.splice(index, 1);
-            campaignAccounts.push(phone);
-            cmp.accounts = campaignAccounts;
-          }
-          break;
-        }
-      }
-      
-      if (!clientToUse) {
-        console.warn(`[Agendador] Nenhuma conta conectada disponível para a campanha "${cmp.name}".`);
-        cmp.status = 'paused';
-        await db.saveCampaign(cmp);
-        await db.addLog({
-          campaignId: cmp.id,
-          campaignName: cmp.name,
-          accountPhone: 'Sistema',
-          target: target,
-          status: 'failed',
-          error: 'Campanha pausada: nenhuma das contas selecionadas está conectada no momento.',
-          userId: cmp.userId
-        });
-        continue;
-      }
-      
-      // Envia a mensagem
-      try {
-        console.log(`[Agendador] Disparando para ${target} usando conta +${phoneToUse}...`);
-        
-        let rawMessage = cmp.message;
-        let mediaBase64 = null;
-        
-        if (rawMessage && rawMessage.startsWith('{') && rawMessage.endsWith('}')) {
-          try {
-            const parsed = JSON.parse(rawMessage);
-            rawMessage = parsed.text || '';
-            mediaBase64 = parsed.image || null;
-          } catch (e) {
-            // Se falhar o parse, mantém a mensagem como texto puro
-          }
-        }
-        
-        // Personaliza a mensagem
-        const messageToSend = await parseMessage(clientToUse, target, rawMessage, phoneToUse);
-        
-        // Dispara no Telegram (com imagem ou texto plano)
-        if (mediaBase64) {
-          const base64Data = mediaBase64.replace(/^data:image\/\w+;base64,/, "");
-          const fileBuffer = Buffer.from(base64Data, 'base64');
-          fileBuffer.name = 'image.png'; // Identificador para a biblioteca GramJS
-          
-          await clientToUse.sendFile(target, {
-            file: fileBuffer,
-            caption: messageToSend,
-            forceDocument: false
-          });
-        } else {
-          await clientToUse.sendMessage(target, { message: messageToSend });
-        }
-        
-        // Atualiza estatísticas de sucesso
-        cmp.sentCount = (cmp.sentCount || 0) + 1;
-        cmp.currentTargetIndex = currentIdx + 1;
-        
-        // Calcula próximo envio com delay + variação humana em MINUTOS
-        const baseDelayMin = Number(cmp.delay || 1);
-        const randomDelayMin = Number(cmp.randomDelay || 0);
-        const actualDelayMin = baseDelayMin + (Math.random() * randomDelayMin);
-        const finalDelay = Math.max(10000, actualDelayMin * 60 * 1000); // mínimo de 10s de segurança
-        
-        cmp.nextSendAt = new Date(Date.now() + finalDelay).toISOString();
-        await db.saveCampaign(cmp);
-        
-        await db.addLog({
-          campaignId: cmp.id,
-          campaignName: cmp.name,
-          accountPhone: phoneToUse,
-          target: target,
-          status: 'success',
-          error: null,
-          userId: cmp.userId
-        });
-        
-        console.log(`[Agendador] Sucesso no envio para ${target}. Próximo disparo em ${Math.round(finalDelay/1000)} segundos.`);
-      } catch (err) {
-        console.error(`[Agendador] Erro ao enviar para ${target}:`, err.message);
-        
-        cmp.failedCount = (cmp.failedCount || 0) + 1;
-        
-        // Trata FloodWaitError (bloqueio temporário do Telegram)
-        if (err.message.includes('FLOOD_WAIT') || err.name === 'FloodWaitError') {
-          // Extrai o tempo de bloqueio se houver
-          const seconds = parseInt(err.message.match(/\d+/)?.[0] || '60', 10);
-          console.warn(`[Agendador] Conta +${phoneToUse} recebeu FLOOD_WAIT de ${seconds}s.`);
           
           await db.addLog({
             campaignId: cmp.id,
             campaignName: cmp.name,
             accountPhone: phoneToUse,
             target: target,
-            status: 'failed',
-            error: `Bloqueio de envio temporário (Flood Wait) de ${seconds} segundos. O sistema aguardará.`,
+            status: 'success',
+            error: null,
             userId: cmp.userId
           });
           
-          // Adia a campanha pelo tempo do bloqueio + 30s de segurança
-          cmp.nextSendAt = new Date(Date.now() + (seconds + 30) * 1000).toISOString();
-          await db.saveCampaign(cmp);
-        } else {
-          // Outros erros (ex: username inválido ou chat restrito).
-          // Avança para o próximo alvo para não travar a campanha inteira!
-          cmp.currentTargetIndex = currentIdx + 1;
+          console.log(`[Agendador] Sucesso no envio para ${target}. Próximo disparo em ${Math.round(finalDelay/1000)} segundos.`);
+        } catch (err) {
+          console.error(`[Agendador] Erro ao enviar para ${target}:`, err.message);
           
-          const delayMs = (cmp.delay || 1) * 60 * 1000;
-          cmp.nextSendAt = new Date(Date.now() + delayMs).toISOString();
-          await db.saveCampaign(cmp);
+          cmp.failedCount = (cmp.failedCount || 0) + 1;
           
-          await db.addLog({
-            campaignId: cmp.id,
-            campaignName: cmp.name,
-            accountPhone: phoneToUse,
-            target: target,
-            status: 'failed',
-            error: `Erro ao enviar: ${err.message}`,
-            userId: cmp.userId
-          });
+          // Trata FloodWaitError (bloqueio temporário do Telegram)
+          if (err.message.includes('FLOOD_WAIT') || err.name === 'FloodWaitError') {
+            // Extrai o tempo de bloqueio se houver
+            const seconds = parseInt(err.message.match(/\d+/)?.[0] || '60', 10);
+            console.warn(`[Agendador] Conta +${phoneToUse} recebeu FLOOD_WAIT de ${seconds}s.`);
+            
+            await db.addLog({
+              campaignId: cmp.id,
+              campaignName: cmp.name,
+              accountPhone: phoneToUse,
+              target: target,
+              status: 'failed',
+              error: `Bloqueio de envio temporário (Flood Wait) de ${seconds} segundos. O sistema aguardará.`,
+              userId: cmp.userId
+            });
+            
+            // Adia a campanha pelo tempo do bloqueio + 30s de segurança
+            cmp.nextSendAt = new Date(Date.now() + (seconds + 30) * 1000).toISOString();
+            await db.saveCampaign(cmp);
+          } else {
+            // Outros erros (ex: username inválido ou chat restrito).
+            // Avança para o próximo alvo para não travar a campanha inteira!
+            cmp.currentTargetIndex = currentIdx + 1;
+            
+            const delayMs = (cmp.delay || 1) * 60 * 1000;
+            cmp.nextSendAt = new Date(Date.now() + delayMs).toISOString();
+            await db.saveCampaign(cmp);
+            
+            await db.addLog({
+              campaignId: cmp.id,
+              campaignName: cmp.name,
+              accountPhone: phoneToUse,
+              target: target,
+              status: 'failed',
+              error: `Erro ao enviar: ${err.message}`,
+              userId: cmp.userId
+            });
+          }
         }
       }
     }
+  } catch (schedulerErr) {
+    console.error('[Agendador] Erro interno fatal:', schedulerErr);
+  } finally {
+    isSchedulerRunning = false;
   }
 }
 

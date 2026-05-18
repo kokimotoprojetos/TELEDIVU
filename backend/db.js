@@ -263,9 +263,22 @@ const db = {
         const intervalValue = Number(campaign.interval || campaign.delay || 60);
         const groupsValue = campaign.groups || campaign.targets || [];
         
+        let textValue = campaign.message || '';
+        let imageValue = campaign.image || null;
+        
+        if (campaign.message && campaign.message.startsWith('{') && campaign.message.endsWith('}')) {
+          try {
+            const parsedMsg = JSON.parse(campaign.message);
+            textValue = parsedMsg.text || textValue;
+            imageValue = parsedMsg.image || imageValue;
+          } catch (e) {
+            // mantém
+          }
+        }
+        
         let msgObj = {
-          text: campaign.message || '',
-          image: campaign.image || null,
+          text: textValue,
+          image: imageValue,
           loop: !!campaign.loop,
           randomDelay: Number(campaign.randomDelay || 0),
           sentCount: Number(campaign.sentCount || 0),
@@ -273,22 +286,6 @@ const db = {
           currentTargetIndex: Number(campaign.currentTargetIndex || 0),
           nextSendAt: campaign.nextSendAt || null
         };
-        
-        if (campaign.message && campaign.message.startsWith('{') && campaign.message.endsWith('}')) {
-          try {
-            const parsedMsg = JSON.parse(campaign.message);
-            msgObj.text = parsedMsg.text || msgObj.text;
-            msgObj.image = parsedMsg.image || msgObj.image;
-            if (parsedMsg.loop !== undefined) msgObj.loop = !!parsedMsg.loop;
-            if (parsedMsg.randomDelay !== undefined) msgObj.randomDelay = Number(parsedMsg.randomDelay);
-            if (parsedMsg.sentCount !== undefined) msgObj.sentCount = Number(parsedMsg.sentCount);
-            if (parsedMsg.failedCount !== undefined) msgObj.failedCount = Number(parsedMsg.failedCount);
-            if (parsedMsg.currentTargetIndex !== undefined) msgObj.currentTargetIndex = Number(parsedMsg.currentTargetIndex);
-            if (parsedMsg.nextSendAt !== undefined) msgObj.nextSendAt = parsedMsg.nextSendAt;
-          } catch (e) {
-            // mantém texto
-          }
-        }
         
         const serializedMessage = JSON.stringify(msgObj);
         

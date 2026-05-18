@@ -341,11 +341,14 @@ const db = {
       try {
         const { data, error } = await supabase.from('logs').select('*').order('timestamp', { ascending: false });
         if (error) throw error;
-        return (data || []).map(l => ({
-          ...l,
-          accountPhone: l.phone || 'Sistema',
-          target: l.group || 'Sistema'
-        }));
+        return (data || []).map(l => {
+          const isSys = l.campaignId === 'system' || l.campaignName === 'Sistema';
+          return {
+            ...l,
+            accountPhone: l.phone || (isSys ? 'Sistema' : 'Desconhecido'),
+            target: l.group || (isSys ? 'Sistema' : 'Desconhecido')
+          };
+        });
       } catch (err) {
         console.error('[Supabase] Erro ao buscar logs:', err.message);
       }
@@ -357,8 +360,9 @@ const db = {
     const id = Math.random().toString(36).substr(2, 9);
     const timestamp = new Date().toISOString();
     
-    const phoneValue = log.phone || log.accountPhone || 'Sistema';
-    const groupValue = log.group || log.target || 'Sistema';
+    const isSys = log.campaignId === 'system' || log.campaignName === 'Sistema';
+    const phoneValue = log.phone || log.accountPhone || (isSys ? 'Sistema' : 'Desconhecido');
+    const groupValue = log.group || log.target || (isSys ? 'Sistema' : 'Desconhecido');
     
     const newLog = {
       id,
@@ -531,11 +535,14 @@ const db = {
       try {
         const { data, error } = await supabase.from('logs').select('*').eq('userId', userId).order('timestamp', { ascending: false });
         if (error) throw error;
-        return (data || []).map(l => ({
-          ...l,
-          accountPhone: l.phone || 'Sistema',
-          target: l.group || 'Sistema'
-        }));
+        return (data || []).map(l => {
+          const isSys = l.campaignId === 'system' || l.campaignName === 'Sistema';
+          return {
+            ...l,
+            accountPhone: l.phone || (isSys ? 'Sistema' : 'Desconhecido'),
+            target: l.group || (isSys ? 'Sistema' : 'Desconhecido')
+          };
+        });
       } catch (err) {
         console.error('[Supabase] Erro ao buscar logs por usuário:', err.message);
       }

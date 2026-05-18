@@ -43,6 +43,15 @@ app.use(cors({
   credentials: false
 }));
 
+// CORRIGIDO (6ª passagem): 'trust proxy' é OBRIGATÓRIO quando o servidor roda atrás
+// de um proxy reverso (Render, Vercel, nginx). Sem isso, req.ip retorna sempre o IP
+// do proxy (ex: 10.x.x.x), e o rate limiter trata TODOS os usuários como um só IP.
+// Isso pode: (a) bloquear TODOS os usuários após 15 tentativas de qualquer um;
+// (b) nunca bloquear um atacante que usa o mesmo proxy.
+if (process.env.NODE_ENV === 'production') {
+  app.set('trust proxy', 1); // confia apenas no primeiro proxy (Render)
+}
+
 // Limite de tamanho de payload: 5MB (suficiente para imagens base64)
 app.use(bodyParser.json({ limit: '5mb' }));
 
@@ -153,10 +162,13 @@ class Deferred {
 
 function getTelegramCredentials(settings) {
   if (settings.useCustomApi && settings.customApiId && settings.customApiHash) {
-    return {
-      apiId: Number(settings.customApiId),
-      apiHash: settings.customApiHash
-    };
+    const parsedApiId = Number(settings.customApiId);
+    // CORRIGIDO (6ª passagem): Number('abc') = NaN — GramJS crasha com NaN como apiId
+    if (isNaN(parsedApiId) || parsedApiId <= 0) {
+      console.warn('[Config] customApiId inválido (não numérico). Usando API padrão.');
+    } else {
+      return { apiId: parsedApiId, apiHash: settings.customApiHash };
+    }
   }
   // B3: Credenciais padrão lidas das variáveis de ambiente primeiro
   return {
@@ -674,8 +686,13 @@ app.delete('/api/accounts/:phone', requireAuth, async (req, res) => {
     }
   }
   
-  await db.deleteAccount(phone);
-  res.json({ success: true, message: `Conta desconectada e removida com sucesso.` });
+  try {
+    await db.deleteAccount(phone);
+    res.json({ success: true, message: `Conta desconectada e removida com sucesso.` });
+  } catch (err) {
+    console.error('[Accounts] Erro ao deletar conta:', err.message);
+    res.status(500).json({ error: 'Erro interno ao remover a conta.' });
+  }
 });
 
 
@@ -1077,6 +1094,20 @@ app.post('/api/campaigns', requireAuth, async (req, res) => {
   if (!Array.isArray(accounts) || accounts.length === 0) {
     return res.status(400).json({ error: 'Selecione pelo menos uma conta de disparo.' });
   }
+  // CORRIGIDO (6ª passagem): validar que os elementos do array são strings válidas
+  // e que todas as contas pertencem ao usuário autenticado
+  const invalidAccounts = accounts.filter(a => typeof a !== 'string' || a.trim().length === 0);
+  if (invalidAccounts.length > 0) {
+    return res.status(400).json({ error: 'Lista de contas contém valores inválidos.' });
+  }
+  // Verificar ownership: cada conta deve pertencer ao usuário que está criando a campanha
+  const accountChecks = await Promise.all(
+    accounts.map(phone => db.getAccountByPhone(cleanPhone(phone)).catch(() => null))
+  );
+  const unauthorizedAccounts = accountChecks.filter(acc => !acc || acc.userId !== userId);
+  if (unauthorizedAccounts.length > 0) {
+    return res.status(403).json({ error: 'Uma ou mais contas selecionadas não pertencem a você.' });
+  }
   
   let existing = null;
   if (id) {
@@ -1195,14 +1226,16 @@ app.post('/api/logs/clear', requireAuth, async (req, res) => {
 });
 
 // Servir frontend React em produção (fallback para SPA React Router)
-// B7: fs importado no topo do arquivo — não mais require() dentro de handler
+// CORRIGIDO (6ª passagem): fs.existsSync é síncrono e bloqueia o event loop.
+// Substituído por res.sendFile() com callback de erro, que é assíncrono.
 app.get('*', (req, res) => {
   const indexHtml = path.join(__dirname, '../frontend/dist/index.html');
-  if (fs.existsSync(indexHtml)) {
-    res.sendFile(indexHtml);
-  } else {
-    res.json({ status: 'online', message: 'DIVUGA Telegram API Server' });
-  }
+  res.sendFile(indexHtml, (err) => {
+    if (err) {
+      // Arquivo não existe (modo dev sem build) — retorna status da API
+      res.json({ status: 'online', message: 'DIVUGA Telegram API Server', version: '1.0.0' });
+    }
+  });
 });
 
 // -------------------------------------------------------------

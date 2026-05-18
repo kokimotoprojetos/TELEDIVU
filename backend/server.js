@@ -2,10 +2,14 @@ require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
 const bodyParser = require('body-parser');
+const helmet = require('helmet');
+const rateLimit = require('express-rate-limit');
+const bcrypt = require('bcryptjs');
 const { TelegramClient, Api } = require('telegram');
 const { StringSession } = require('telegram/sessions');
 const qrcode = require('qrcode');
 const { v4: uuidv4 } = require('uuid');
+const fs = require('fs');
 const db = require('./db');
 const path = require('path');
 const crypto = require('crypto');
@@ -13,20 +17,69 @@ const crypto = require('crypto');
 const app = express();
 const PORT = process.env.PORT || 5000;
 
-app.use(cors());
-app.use(bodyParser.json());
+// -------------------------------------------------------------
+// SEGURANÇA: Headers HTTP, CORS restrito e limite de payload
+// -------------------------------------------------------------
+app.use(helmet({
+  crossOriginResourcePolicy: { policy: 'cross-origin' }
+}));
+
+const ALLOWED_ORIGINS = [
+  'https://teledivu.vercel.app',
+  'http://localhost:5173',
+  'http://localhost:5000'
+];
+app.use(cors({
+  origin: (origin, callback) => {
+    // Permite requisições sem origin (ex: Render health checks, curl)
+    if (!origin || ALLOWED_ORIGINS.includes(origin)) {
+      callback(null, true);
+    } else {
+      callback(new Error('Bloqueado pela política de CORS.'));
+    }
+  },
+  methods: ['GET', 'POST', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization'],
+  credentials: false
+}));
+
+// Limite de tamanho de payload: 5MB (suficiente para imagens base64)
+app.use(bodyParser.json({ limit: '5mb' }));
+
+// Rate limiting nas rotas de autenticação (C4 / A2)
+const authLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutos
+  max: 15, // máximo 15 tentativas por IP
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Muitas tentativas. Aguarde 15 minutos antes de tentar novamente.' }
+});
 
 // Servir arquivos estáticos do frontend em produção se compilado
 app.use(express.static(path.join(__dirname, '../frontend/dist')));
 
 // -------------------------------------------------------------
-// SISTEMA DE SEGURANÇA E JWT NATIVO (SEM DEPENDÊNCIAS EXTERNAS)
+// SISTEMA DE SEGURANÇA E JWT NATIVO
 // -------------------------------------------------------------
-const JWT_SECRET = process.env.JWT_SECRET || 'divuga-super-secret-key-12345';
 
+// C4: JWT_SECRET obrigatório — impede inicialização sem chave forte
+const JWT_SECRET = process.env.JWT_SECRET;
+if (!JWT_SECRET) {
+  console.error('\n[FATAL] JWT_SECRET não está definido nas variáveis de ambiente!');
+  console.error('[FATAL] Defina JWT_SECRET no arquivo .env ou nas variáveis do Render.');
+  console.error('[FATAL] Sugestão: node -e "require(\'crypto\').randomBytes(64).toString(\'hex\') |> console.log"');
+  process.exit(1);
+}
+
+// C1: Token com expiração de 24 horas
 function generateToken(payload) {
+  const tokenPayload = {
+    ...payload,
+    iat: Math.floor(Date.now() / 1000),
+    exp: Math.floor(Date.now() / 1000) + (60 * 60 * 24) // 24 horas
+  };
   const header = Buffer.from(JSON.stringify({ alg: 'HS256', typ: 'JWT' })).toString('base64url');
-  const body = Buffer.from(JSON.stringify(payload)).toString('base64url');
+  const body = Buffer.from(JSON.stringify(tokenPayload)).toString('base64url');
   const signature = crypto.createHmac('sha256', JWT_SECRET).update(`${header}.${body}`).digest('base64url');
   return `${header}.${body}.${signature}`;
 }
@@ -34,16 +87,32 @@ function generateToken(payload) {
 function verifyToken(token) {
   try {
     const [header, body, signature] = token.split('.');
+    if (!header || !body || !signature) return null;
     const expectedSignature = crypto.createHmac('sha256', JWT_SECRET).update(`${header}.${body}`).digest('base64url');
-    if (signature !== expectedSignature) return null;
-    return JSON.parse(Buffer.from(body, 'base64url').toString('utf8'));
+    // Comparação segura contra timing attacks
+    if (!crypto.timingSafeEqual(Buffer.from(signature), Buffer.from(expectedSignature))) return null;
+    const decoded = JSON.parse(Buffer.from(body, 'base64url').toString('utf8'));
+    // C1: Verificar expiração
+    if (decoded.exp && decoded.exp < Math.floor(Date.now() / 1000)) return null;
+    return decoded;
   } catch (err) {
     return null;
   }
 }
 
+// C2: bcrypt com salt cost 12 (substituindo SHA-256 sem salt)
 function hashPassword(password) {
-  return crypto.createHash('sha256').update(password).digest('hex');
+  return bcrypt.hashSync(password, 12);
+}
+
+function verifyPassword(plain, hash) {
+  // Suporta hashes bcrypt novos E hashes SHA-256 legados (migração gradual)
+  if (hash && hash.startsWith('$2')) {
+    return bcrypt.compareSync(plain, hash);
+  }
+  // Fallback para hashes SHA-256 antigos (legado)
+  const legacyHash = crypto.createHash('sha256').update(plain).digest('hex');
+  return legacyHash === hash;
 }
 
 function requireAuth(req, res, next) {
@@ -84,9 +153,10 @@ function getTelegramCredentials(settings) {
       apiHash: settings.customApiHash
     };
   }
+  // B3: Credenciais padrão lidas das variáveis de ambiente primeiro
   return {
-    apiId: 31992404,
-    apiHash: '29d0d2dc1ac01f98aefed17f7e017edf'
+    apiId: Number(process.env.TELEGRAM_API_ID) || 31992404,
+    apiHash: process.env.TELEGRAM_API_HASH || '29d0d2dc1ac01f98aefed17f7e017edf'
   };
 }
 
@@ -410,24 +480,29 @@ async function runScheduler() {
 setInterval(runScheduler, 10000);
 
 // =============================================================
-// ROTAS DE AUTENTICAÇÃO
+// ROTAS DE AUTENTICAÇÃO (com rate limiting — A2)
 // =============================================================
-app.post('/api/auth/register', async (req, res) => {
+app.post('/api/auth/register', authLimiter, async (req, res) => {
   const { username, password } = req.body;
-  if (!username || !password) {
-    return res.status(400).json({ error: 'Usuário e senha são obrigatórios.' });
+
+  // M3: Validação de entradas
+  if (!username || typeof username !== 'string' || username.trim().length < 3) {
+    return res.status(400).json({ error: 'Usuário deve ter pelo menos 3 caracteres.' });
+  }
+  if (!password || typeof password !== 'string' || password.length < 6) {
+    return res.status(400).json({ error: 'Senha deve ter pelo menos 6 caracteres.' });
   }
 
   try {
-    const existing = await db.getUserByUsername(username);
+    const existing = await db.getUserByUsername(username.trim());
     if (existing) {
       return res.status(400).json({ error: 'Este nome de usuário já está em uso.' });
     }
 
     const newUser = {
       id: uuidv4(),
-      username: username.trim(),
-      password: hashPassword(password),
+      username: username.trim().toLowerCase(),
+      password: hashPassword(password), // C2: bcrypt
       createdAt: new Date().toISOString()
     };
 
@@ -435,26 +510,37 @@ app.post('/api/auth/register', async (req, res) => {
     const token = generateToken({ id: newUser.id, username: newUser.username });
     res.json({ token, user: { id: newUser.id, username: newUser.username } });
   } catch (err) {
-    res.status(500).json({ error: `Erro no registro: ${err.message}` });
+    console.error('[Auth] Erro no registro:', err.message); // M4: log apenas no servidor
+    res.status(500).json({ error: 'Erro interno ao criar conta. Tente novamente.' });
   }
 });
 
-app.post('/api/auth/login', async (req, res) => {
+app.post('/api/auth/login', authLimiter, async (req, res) => {
   const { username, password } = req.body;
-  if (!username || !password) {
+
+  // M3: Validação de entradas
+  if (!username || typeof username !== 'string' || !password || typeof password !== 'string') {
     return res.status(400).json({ error: 'Usuário e senha são obrigatórios.' });
   }
 
   try {
-    const user = await db.getUserByUsername(username);
-    if (!user || user.password !== hashPassword(password)) {
+    const user = await db.getUserByUsername(username.trim());
+    // C2: verifyPassword suporta bcrypt (novo) e SHA-256 (legado)
+    if (!user || !verifyPassword(password, user.password)) {
       return res.status(401).json({ error: 'Usuário ou senha incorretos.' });
+    }
+
+    // Migração automática: re-hash com bcrypt se ainda for SHA-256
+    if (user.password && !user.password.startsWith('$2')) {
+      user.password = hashPassword(password);
+      await db.saveUser(user).catch(e => console.error('[Auth] Erro ao migrar hash:', e.message));
     }
 
     const token = generateToken({ id: user.id, username: user.username });
     res.json({ token, user: { id: user.id, username: user.username } });
   } catch (err) {
-    res.status(500).json({ error: `Erro no login: ${err.message}` });
+    console.error('[Auth] Erro no login:', err.message); // M4: sem vazamento de detalhes
+    res.status(500).json({ error: 'Erro interno ao realizar login. Tente novamente.' });
   }
 });
 
@@ -685,13 +771,19 @@ app.post('/api/accounts/connect/phone/start', requireAuth, async (req, res) => {
     activeClients.set(cleanPhone(me.phone), client);
     console.log(`[Auth Phone] Conta +${me.phone} autenticada com sucesso!`);
     
-    // Limpa a conexão pendente após alguns minutos de segurança
-    setTimeout(() => pendingConnections.delete(sessionId), 60000);
+    // M8: Limpa a conexão pendente após 5 minutos (com disconnect seguro)
+    setTimeout(async () => {
+      try { await client.disconnect(); } catch(e) {}
+      pendingConnections.delete(sessionId);
+    }, 5 * 60 * 1000);
   }).catch(err => {
     console.error(`[Auth Phone Catch Error]:`, err.message);
     pendingConn.status = 'error';
     pendingConn.error = err.message;
-    setTimeout(() => pendingConnections.delete(sessionId), 60000);
+    setTimeout(async () => {
+      try { await client.disconnect(); } catch(e) {}
+      pendingConnections.delete(sessionId);
+    }, 5 * 60 * 1000);
   });
   
   res.json({ sessionId, status: 'connecting' });
@@ -814,13 +906,19 @@ app.post('/api/accounts/connect/qr/start', requireAuth, async (req, res) => {
     activeClients.set(cleanPhone(me.phone), client);
     console.log(`[Auth QR] Conta +${me.phone} autenticada via QR com sucesso!`);
     
-    // Limpa a conexão pendente após alguns minutos de segurança
-    setTimeout(() => pendingConnections.delete(sessionId), 60000);
+    // M8: Limpa a conexão pendente após 5 minutos (com disconnect seguro)
+    setTimeout(async () => {
+      try { await client.disconnect(); } catch(e) {}
+      pendingConnections.delete(sessionId);
+    }, 5 * 60 * 1000);
   }).catch(err => {
     console.error(`[Auth QR Catch Error]:`, err.message);
     pendingConn.status = 'error';
     pendingConn.error = err.message;
-    setTimeout(() => pendingConnections.delete(sessionId), 60000);
+    setTimeout(async () => {
+      try { await client.disconnect(); } catch(e) {}
+      pendingConnections.delete(sessionId);
+    }, 5 * 60 * 1000);
   });
   
   res.json({ sessionId, status: 'connecting' });
@@ -859,6 +957,24 @@ app.get('/api/campaigns', requireAuth, async (req, res) => {
 app.post('/api/campaigns', requireAuth, async (req, res) => {
   const { id, name, accounts, targetsText, message, delay, randomDelay, loop } = req.body;
   const userId = req.user.id;
+
+  // M3: Validação de entradas obrigatórias
+  if (!name || typeof name !== 'string' || name.trim().length === 0) {
+    return res.status(400).json({ error: 'Nome da campanha é obrigatório.' });
+  }
+  if (!targetsText || typeof targetsText !== 'string') {
+    return res.status(400).json({ error: 'Lista de alvos é obrigatória.' });
+  }
+  if (!message || typeof message !== 'string' || message.trim().length === 0) {
+    return res.status(400).json({ error: 'Mensagem da campanha é obrigatória.' });
+  }
+  const parsedDelay = Number(delay);
+  if (isNaN(parsedDelay) || parsedDelay < 1) {
+    return res.status(400).json({ error: 'Intervalo inválido. Mínimo de 1 minuto.' });
+  }
+  if (!Array.isArray(accounts) || accounts.length === 0) {
+    return res.status(400).json({ error: 'Selecione pelo menos uma conta de disparo.' });
+  }
   
   let existing = null;
   if (id) {
@@ -876,15 +992,15 @@ app.post('/api/campaigns', requireAuth, async (req, res) => {
     
   const campaign = {
     id: id || uuidv4(),
-    name: name || 'Nova Campanha',
-    accounts: accounts || [],
+    name: name.trim(),
+    accounts: accounts,
     targets: targets,
-    targetsText: targetsText, // guarda o texto original para edição
-    message: message || '',
-    delay: Number(delay) || 60,
-    randomDelay: Number(randomDelay) || 10,
-    loop: !!loop, // Garante que seja booleano
-    userId: userId, // Salva o ID do dono
+    targetsText: targetsText,
+    message: message,
+    delay: parsedDelay,
+    randomDelay: Number(randomDelay) || 0,
+    loop: !!loop,
+    userId: userId,
     status: existing ? existing.status || 'paused' : 'paused',
     sentCount: existing ? existing.sentCount || 0 : 0,
     failedCount: existing ? existing.failedCount || 0 : 0,
@@ -893,8 +1009,13 @@ app.post('/api/campaigns', requireAuth, async (req, res) => {
     nextSendAt: existing ? existing.nextSendAt : null
   };
   
-  const saved = await db.saveCampaign(campaign);
-  res.json(saved);
+  try {
+    const saved = await db.saveCampaign(campaign);
+    res.json(saved);
+  } catch (err) {
+    console.error('[Campanhas] Erro ao salvar:', err.message);
+    res.status(500).json({ error: 'Erro interno ao salvar a campanha. Tente novamente.' });
+  }
 });
 
 app.delete('/api/campaigns/:id', requireAuth, async (req, res) => {
@@ -913,28 +1034,34 @@ app.delete('/api/campaigns/:id', requireAuth, async (req, res) => {
 app.post('/api/campaigns/:id/toggle', requireAuth, async (req, res) => {
   const { id } = req.params;
   const userId = req.user.id;
-  const cmp = await db.getCampaignById(id);
   
-  if (!cmp) return res.status(404).json({ error: 'Campanha não encontrada.' });
-  if (cmp.userId !== userId) return res.status(403).json({ error: 'Você não tem permissão para gerenciar esta campanha.' });
-  
-  if (cmp.status === 'active') {
-    cmp.status = 'paused';
-    cmp.nextSendAt = null;
-  } else {
-    cmp.status = 'active';
-    // Se estava completado e o usuário reativar, zera o índice para começar de novo
-    if (cmp.status === 'completed' || cmp.currentTargetIndex >= cmp.targets.length) {
-      cmp.currentTargetIndex = 0;
-      cmp.sentCount = 0;
-      cmp.failedCount = 0;
+  try {
+    const cmp = await db.getCampaignById(id);
+    
+    if (!cmp) return res.status(404).json({ error: 'Campanha não encontrada.' });
+    if (cmp.userId !== userId) return res.status(403).json({ error: 'Você não tem permissão para gerenciar esta campanha.' });
+    
+    if (cmp.status === 'active') {
+      cmp.status = 'paused';
+      cmp.nextSendAt = null;
+    } else {
+      // M1: Salvar o status ANTES de sobrescrever para checar se era 'completed'
+      const wasCompleted = cmp.status === 'completed';
+      cmp.status = 'active';
+      if (wasCompleted || cmp.currentTargetIndex >= (cmp.targets || []).length) {
+        cmp.currentTargetIndex = 0;
+        cmp.sentCount = 0;
+        cmp.failedCount = 0;
+      }
+      cmp.nextSendAt = new Date(Date.now() + 5000).toISOString();
     }
-    // Dispara o primeiro envio após 5 segundos da ativação
-    cmp.nextSendAt = new Date(Date.now() + 5000).toISOString();
+    
+    await db.saveCampaign(cmp);
+    res.json(cmp);
+  } catch (err) {
+    console.error('[Toggle] Erro ao alterar status da campanha:', err.message);
+    res.status(500).json({ error: 'Erro interno ao alterar status da campanha.' });
   }
-  
-  await db.saveCampaign(cmp);
-  res.json(cmp);
 });
 
 // -------------------------------------------------------------
@@ -951,9 +1078,9 @@ app.post('/api/logs/clear', requireAuth, async (req, res) => {
 });
 
 // Servir frontend React em produção (fallback para SPA React Router)
+// B7: fs importado no topo do arquivo — não mais require() dentro de handler
 app.get('*', (req, res) => {
   const indexHtml = path.join(__dirname, '../frontend/dist/index.html');
-  const fs = require('fs');
   if (fs.existsSync(indexHtml)) {
     res.sendFile(indexHtml);
   } else {

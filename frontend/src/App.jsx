@@ -315,10 +315,12 @@ function App() {
 
   const submitPassword2fa = async () => {
     if (!password2faInput) return;
+    const passwordToSend = password2faInput;
+    setPassword2faInput(''); // M7: Limpar campo imediatamente antes de enviar
     try {
       await authenticatedFetch(`${API_BASE}/accounts/connect/phone/submit-password`, {
         method: 'POST',
-        body: JSON.stringify({ sessionId: connectionSessionId, password: password2faInput })
+        body: JSON.stringify({ sessionId: connectionSessionId, password: passwordToSend })
       });
     } catch (e) {
       console.error(e);
@@ -442,8 +444,18 @@ function App() {
   const handleImageUpload = (e) => {
     const file = e.target.files[0];
     if (!file) return;
+
+    // A4: Validar tipo de arquivo via MIME type (não apenas extensão)
+    const ALLOWED_TYPES = ['image/jpeg', 'image/png', 'image/gif', 'image/webp'];
+    if (!ALLOWED_TYPES.includes(file.type)) {
+      alert('Tipo de arquivo não permitido. Use JPG, PNG, GIF ou WebP.');
+      e.target.value = ''; // Limpar input
+      return;
+    }
+
     if (file.size > 2 * 1024 * 1024) {
-      alert("A imagem selecionada é muito grande! Por favor, escolha uma imagem com menos de 2MB para garantir a performance de envio.");
+      alert('A imagem selecionada é muito grande! Por favor, escolha uma imagem com menos de 2MB para garantir a performance de envio.');
+      e.target.value = '';
       return;
     }
     const reader = new FileReader();
@@ -533,7 +545,7 @@ function App() {
   };
 
   const clearLogs = async () => {
-    if (window.confirm('Limpar todos os registros de disparos da tela?')) {
+    if (window.confirm('Limpar todos os registros de disparos? Esta ação não pode ser desfeita.')) {
       try {
         await authenticatedFetch(`${API_BASE}/logs/clear`, { method: 'POST' });
         fetchData();

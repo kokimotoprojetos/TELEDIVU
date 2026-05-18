@@ -9,9 +9,12 @@
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.105.4",
+    "bcryptjs": "^3.0.3",
     "cors": "^2.8.5",
     "dotenv": "^17.4.2",
     "express": "^4.21.2",
+    "express-rate-limit": "^8.5.2",
+    "helmet": "^8.1.0",
     "qrcode": "^1.5.4",
     "telegram": "^2.26.15",
     "uuid": "^11.0.3"

@@ -9,15 +9,19 @@
     "frontend": "npm run dev --prefix frontend",
     "dev": "npx concurrently \"npm run backend\" \"npm run frontend\"",
     "build": "npm run build --prefix frontend",
-    "install-all": "npm install && npm install --prefix frontend"
+    "install-all": "npm install && npm install --prefix frontend",
+    "audit-all": "npm audit && npm audit --prefix frontend && npm audit --prefix backend"
   },
   "dependencies": {
-    "express": "^4.21.2",
+    "@supabase/supabase-js": "^2.105.4",
+    "bcryptjs": "^3.0.3",
     "cors": "^2.8.5",
-    "telegram": "^2.26.15",
+    "dotenv": "^17.4.2",
+    "express": "^4.21.2",
+    "express-rate-limit": "^8.5.2",
+    "helmet": "^8.1.0",
     "qrcode": "^1.5.4",
-    "uuid": "^11.0.3",
-    "@supabase/supabase-js": "^2.43.4",
-    "dotenv": "^16.4.5"
+    "telegram": "^2.26.15",
+    "uuid": "^11.0.3"
   }
 }

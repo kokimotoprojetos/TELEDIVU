@@ -89,8 +89,13 @@ function verifyToken(token) {
     const [header, body, signature] = token.split('.');
     if (!header || !body || !signature) return null;
     const expectedSignature = crypto.createHmac('sha256', JWT_SECRET).update(`${header}.${body}`).digest('base64url');
-    // Comparação segura contra timing attacks
-    if (!crypto.timingSafeEqual(Buffer.from(signature), Buffer.from(expectedSignature))) return null;
+    // CORRIGIDO: timingSafeEqual requer buffers de MESMO COMPRIMENTO.
+    // Se os comprimentos diferirem, Buffer.from() cria buffers diferentes e a função
+    // lança RangeError em vez de retornar false — causando crash do servidor.
+    const sigBuf = Buffer.from(signature);
+    const expBuf = Buffer.from(expectedSignature);
+    if (sigBuf.length !== expBuf.length) return null;
+    if (!crypto.timingSafeEqual(sigBuf, expBuf)) return null;
     const decoded = JSON.parse(Buffer.from(body, 'base64url').toString('utf8'));
     // C1: Verificar expiração
     if (decoded.exp && decoded.exp < Math.floor(Date.now() / 1000)) return null;
@@ -327,7 +332,8 @@ async function runScheduler() {
         const target = targets[currentIdx];
         
         // Sistema de Round-Robin para selecionar a conta de envio
-        const campaignAccounts = cmp.accounts || [];
+        // CORRIGIDO: usar cópia rasa do array para evitar mutação do objeto compartilhado
+        const campaignAccounts = [...(cmp.accounts || [])];
         let clientToUse = null;
         let phoneToUse = null;
         
@@ -386,9 +392,14 @@ async function runScheduler() {
           
           // Dispara no Telegram (com imagem ou texto plano)
           if (mediaBase64) {
-            const base64Data = mediaBase64.replace(/^data:image\/\w+;base64,/, "");
+            const base64Data = mediaBase64.replace(/^data:image\/\w+;base64,/, '');
+            // SEGURANÇA: limitar tamanho do buffer para evitar DoS por imagem gigante
+            const MAX_IMAGE_BYTES = 5 * 1024 * 1024; // 5MB descodificados
+            if (base64Data.length * 0.75 > MAX_IMAGE_BYTES) {
+              throw new Error('Imagem da campanha excede o tamanho máximo permitido (5MB).');
+            }
             const fileBuffer = Buffer.from(base64Data, 'base64');
-            fileBuffer.name = 'image.png'; // Identificador para a biblioteca GramJS
+            fileBuffer.name = 'image.png';
             
             await clientToUse.sendFile(target, {
               file: fileBuffer,
@@ -396,6 +407,10 @@ async function runScheduler() {
               forceDocument: false
             });
           } else {
+            // CORRIGIDO: não enviar mensagem vazia (causaria erro do Telegram)
+            if (!messageToSend || messageToSend.trim().length === 0) {
+              throw new Error('Mensagem resultante está vazia após processar o template. Verifique o conteúdo da campanha.');
+            }
             await clientToUse.sendMessage(target, { message: messageToSend });
           }
           
@@ -430,9 +445,13 @@ async function runScheduler() {
           
           // Trata FloodWaitError (bloqueio temporário do Telegram)
           if (err.message.includes('FLOOD_WAIT') || err.name === 'FloodWaitError') {
-            // Extrai o tempo de bloqueio se houver
-            const seconds = parseInt(err.message.match(/\d+/)?.[0] || '60', 10);
-            console.warn(`[Agendador] Conta +${phoneToUse} recebeu FLOOD_WAIT de ${seconds}s.`);
+            // CORRIGIDO: capturar segundos e limitar a 1 hora máximo para evitar bloqueio eterno
+            const rawSeconds = parseInt(err.message.match(/\d+/)?.[0] || '60', 10);
+            const seconds = Math.min(rawSeconds, 3600); // máximo de 1 hora
+            
+            // CORRIGIDO: failedCount precisa ser salvo no mesmo saveCampaign do flood
+            cmp.nextSendAt = new Date(Date.now() + (seconds + 30) * 1000).toISOString();
+            await db.saveCampaign(cmp); // failedCount já foi incrementado acima
             
             await db.addLog({
               campaignId: cmp.id,
@@ -440,13 +459,9 @@ async function runScheduler() {
               accountPhone: phoneToUse,
               target: target,
               status: 'failed',
-              error: `Bloqueio de envio temporário (Flood Wait) de ${seconds} segundos. O sistema aguardará.`,
+              error: `Bloqueio temporário do Telegram (Flood Wait ${seconds}s). Sistema aguardará antes de continuar.`,
               userId: cmp.userId
             });
-            
-            // Adia a campanha pelo tempo do bloqueio + 30s de segurança
-            cmp.nextSendAt = new Date(Date.now() + (seconds + 30) * 1000).toISOString();
-            await db.saveCampaign(cmp);
           } else {
             // Outros erros (ex: username inválido ou chat restrito).
             // Avança para o próximo alvo para não travar a campanha inteira!
@@ -470,7 +485,9 @@ async function runScheduler() {
       }
     }
   } catch (schedulerErr) {
-    console.error('[Agendador] Erro interno fatal:', schedulerErr);
+    // CORRIGIDO: logar stack completo para debug de erros internos do agendador
+    console.error('[Agendador] Erro interno fatal:', schedulerErr.message);
+    console.error(schedulerErr.stack);
   } finally {
     isSchedulerRunning = false;
   }

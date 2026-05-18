@@ -64,6 +64,15 @@ const authLimiter = rateLimit({
   message: { error: 'Muitas tentativas. Aguarde 15 minutos antes de tentar novamente.' }
 });
 
+// Limite específico para rotas de conexão Telegram (evitar DoS de memory leak)
+const connectLimiter = rateLimit({
+  windowMs: 5 * 60 * 1000, // 5 minutos
+  max: 10, // máximo 10 conexões pendentes por IP a cada 5 min
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Muitas tentativas de conexão. Aguarde 5 minutos antes de tentar novamente.' }
+});
+
 // Servir arquivos estáticos do frontend em produção se compilado
 app.use(express.static(path.join(__dirname, '../frontend/dist')));
 
@@ -426,6 +435,14 @@ async function runScheduler() {
           
           // Dispara no Telegram (com imagem ou texto plano)
           if (mediaBase64) {
+            // CORRIGIDO (8ª passagem): Extrair a extensão correta do MIME type (JPEG/GIF/WebP)
+            // em vez de forçar ".png", o que quebrava animações ou metadados de outras imagens.
+            let extension = 'png';
+            const mimeMatch = mediaBase64.match(/^data:image\/(\w+);base64,/);
+            if (mimeMatch) {
+              extension = mimeMatch[1];
+            }
+            
             const base64Data = mediaBase64.replace(/^data:image\/\w+;base64,/, '');
             // SEGURANÇA: limitar tamanho do buffer para evitar DoS por imagem gigante
             const MAX_IMAGE_BYTES = 5 * 1024 * 1024; // 5MB descodificados
@@ -433,7 +450,7 @@ async function runScheduler() {
               throw new Error('Imagem da campanha excede o tamanho máximo permitido (5MB).');
             }
             const fileBuffer = Buffer.from(base64Data, 'base64');
-            fileBuffer.name = 'image.png';
+            fileBuffer.name = `image.${extension}`;
             
             await clientToUse.sendFile(target, {
               file: fileBuffer,
@@ -793,7 +810,12 @@ app.get('/api/accounts/:phone/groups', requireAuth, async (req, res) => {
 // -------------------------------------------------------------
 // FLUXO DE LOGIN ASSÍNCRONO POR NÚMERO (SMS)
 // -------------------------------------------------------------
-app.post('/api/accounts/connect/phone/start', requireAuth, async (req, res) => {
+app.post('/api/accounts/connect/phone/start', requireAuth, connectLimiter, async (req, res) => {
+  // CORRIGIDO (8ª passagem): Limite global de conexões pendentes para prevenir OOM DoS
+  if (pendingConnections.size >= 100) {
+    return res.status(503).json({ error: 'Servidor sob alta carga. Tente novamente em alguns minutos.' });
+  }
+
   const { phone } = req.body;
   if (!phone) return res.status(400).json({ error: 'Número de telefone é obrigatório.' });
   
@@ -941,7 +963,12 @@ app.post('/api/accounts/connect/phone/submit-password', requireAuth, async (req,
 // -------------------------------------------------------------
 // FLUXO DE LOGIN ASSÍNCRONO POR QR CODE
 // -------------------------------------------------------------
-app.post('/api/accounts/connect/qr/start', requireAuth, async (req, res) => {
+app.post('/api/accounts/connect/qr/start', requireAuth, connectLimiter, async (req, res) => {
+  // CORRIGIDO (8ª passagem): Limite global de conexões pendentes para prevenir OOM DoS
+  if (pendingConnections.size >= 100) {
+    return res.status(503).json({ error: 'Servidor sob alta carga. Tente novamente em alguns minutos.' });
+  }
+
   const settings = await db.getSettings();
   const sessionId = uuidv4();
   const stringSession = new StringSession("");

@@ -3,7 +3,7 @@ import React, { useState, useEffect, useRef } from 'react';
 const API_BASE = import.meta.env.VITE_API_BASE_URL || 
   (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1'
     ? 'http://localhost:5000/api'
-    : `${window.location.origin}/api`);
+    : 'https://teledivu.onrender.com/api');
 
 // Helper de requisições autenticadas com controle automático de 401
 const authenticatedFetch = async (url, options = {}) => {

@@ -107,6 +107,17 @@ async function initializeSavedAccounts() {
         if (me) {
           activeClients.set(cleanPhone(acc.phone), client);
           console.log(`[Telegram] Conta +${acc.phone} (${me.firstName || 'Sem Nome'}) conectada com sucesso!`);
+          
+          // Auto-healing / Migration: update name, firstName, lastName and username if they are missing or empty
+          const currentName = `${me.firstName || ''} ${me.lastName || ''}`.trim() || 'Sem Nome';
+          if (!acc.name || acc.name === 'Sem Nome' || !acc.firstName || acc.firstName === 'Sem Nome') {
+            acc.name = currentName;
+            acc.firstName = me.firstName || 'Sem Nome';
+            acc.lastName = me.lastName || '';
+            acc.username = me.username || '';
+            await db.saveAccount(acc);
+            console.log(`[Telegram] Nome da conta +${acc.phone} atualizado/corrigido para "${currentName}" no banco de dados.`);
+          }
         } else {
           throw new Error('Falha ao obter dados do usuário');
         }
@@ -264,11 +275,36 @@ async function runScheduler() {
       try {
         console.log(`[Agendador] Disparando para ${target} usando conta +${phoneToUse}...`);
         
-        // Personaliza a mensagem
-        const messageToSend = await parseMessage(clientToUse, target, cmp.message, phoneToUse);
+        let rawMessage = cmp.message;
+        let mediaBase64 = null;
         
-        // Dispara no Telegram
-        await clientToUse.sendMessage(target, { message: messageToSend });
+        if (rawMessage && rawMessage.startsWith('{') && rawMessage.endsWith('}')) {
+          try {
+            const parsed = JSON.parse(rawMessage);
+            rawMessage = parsed.text || '';
+            mediaBase64 = parsed.image || null;
+          } catch (e) {
+            // Se falhar o parse, mantém a mensagem como texto puro
+          }
+        }
+        
+        // Personaliza a mensagem
+        const messageToSend = await parseMessage(clientToUse, target, rawMessage, phoneToUse);
+        
+        // Dispara no Telegram (com imagem ou texto plano)
+        if (mediaBase64) {
+          const base64Data = mediaBase64.replace(/^data:image\/\w+;base64,/, "");
+          const fileBuffer = Buffer.from(base64Data, 'base64');
+          fileBuffer.name = 'image.png'; // Identificador para a biblioteca GramJS
+          
+          await clientToUse.sendFile(target, {
+            file: fileBuffer,
+            caption: messageToSend,
+            forceDocument: false
+          });
+        } else {
+          await clientToUse.sendMessage(target, { message: messageToSend });
+        }
         
         // Atualiza estatísticas de sucesso
         cmp.sentCount = (cmp.sentCount || 0) + 1;
@@ -510,13 +546,28 @@ app.get('/api/accounts/:phone/groups', requireAuth, async (req, res) => {
       } else {
         name = d.title || 'Grupo Sem Nome';
       }
+
+      // Detecção de restrição de envio de mídia (fotos/imagens)
+      let restrictsMedia = false;
+      if (!d.isUser && d.entity) {
+        const entity = d.entity;
+        const isAdmin = entity.creator || entity.admin || !!entity.adminRights;
+        if (!isAdmin) {
+          const hasBannedMedia = entity.bannedRights && entity.bannedRights.sendMedia;
+          const hasDefaultBannedMedia = entity.defaultBannedRights && entity.defaultBannedRights.sendMedia;
+          if (hasBannedMedia || hasDefaultBannedMedia) {
+            restrictsMedia = true;
+          }
+        }
+      }
       
       return {
         id: d.id.toString(),
         name: name,
         title: name, // Compatibilidade com frontend anterior
         username: d.entity && d.entity.username ? d.entity.username : null,
-        type: type
+        type: type,
+        restrictsMedia: restrictsMedia
       };
     });
       
@@ -586,10 +637,12 @@ app.post('/api/accounts/connect/phone/start', requireAuth, async (req, res) => {
     // Sucesso!
     pendingConn.status = 'success';
     const me = await client.getMe();
+    const fullName = `${me.firstName || ''} ${me.lastName || ''}`.trim() || 'Sem Nome';
     
     // Salva no Banco de Dados
     await db.saveAccount({
       phone: me.phone,
+      name: fullName,
       firstName: me.firstName || 'Sem Nome',
       lastName: me.lastName || '',
       username: me.username || '',
@@ -712,10 +765,12 @@ app.post('/api/accounts/connect/qr/start', requireAuth, async (req, res) => {
     // Sucesso!
     pendingConn.status = 'success';
     const me = await client.getMe();
+    const fullName = `${me.firstName || ''} ${me.lastName || ''}`.trim() || 'Sem Nome';
     
     // Salva no Banco de Dados
     await db.saveAccount({
       phone: me.phone,
+      name: fullName,
       firstName: me.firstName || 'Sem Nome',
       lastName: me.lastName || '',
       username: me.username || '',

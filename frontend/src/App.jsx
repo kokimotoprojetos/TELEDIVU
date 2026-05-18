@@ -76,6 +76,7 @@ function App() {
     accounts: [],
     targetsText: '',
     message: '',
+    image: null,
     delay: 60,
     randomDelay: 10,
     loop: false
@@ -376,11 +377,25 @@ function App() {
   const openCampaignModal = (campaign = null) => {
     if (campaign) {
       setEditingCampaign(campaign);
+      
+      let msgText = campaign.message || '';
+      let msgImage = null;
+      if (msgText.startsWith('{') && msgText.endsWith('}')) {
+        try {
+          const parsed = JSON.parse(msgText);
+          msgText = parsed.text || '';
+          msgImage = parsed.image || null;
+        } catch (e) {
+          // Mantém mensagem original se falhar
+        }
+      }
+      
       setCampaignForm({
         name: campaign.name,
         accounts: campaign.accounts,
         targetsText: campaign.targetsText || campaign.targets.join('\n'),
-        message: campaign.message,
+        message: msgText,
+        image: msgImage,
         delay: campaign.delay,
         randomDelay: campaign.randomDelay,
         loop: campaign.loop || false
@@ -392,6 +407,7 @@ function App() {
         accounts: [],
         targetsText: '',
         message: '',
+        image: null,
         delay: 60,
         randomDelay: 10,
         loop: false
@@ -417,6 +433,20 @@ function App() {
     setCampaignForm({ ...campaignForm, accounts: accs });
   };
 
+  const handleImageUpload = (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    if (file.size > 2 * 1024 * 1024) {
+      alert("A imagem selecionada é muito grande! Por favor, escolha uma imagem com menos de 2MB para garantir a performance de envio.");
+      return;
+    }
+    const reader = new FileReader();
+    reader.onloadend = () => {
+      setCampaignForm({ ...campaignForm, image: reader.result });
+    };
+    reader.readAsDataURL(file);
+  };
+
   const saveCampaign = async (e) => {
     e.preventDefault();
     if (!campaignForm.name) return alert('Por favor, informe o nome da campanha.');
@@ -424,13 +454,29 @@ function App() {
     if (!campaignForm.targetsText) return alert('Insira pelo menos um alvo (username ou ID).');
     if (!campaignForm.message) return alert('Escreva a mensagem da campanha.');
 
+    let finalMessage = campaignForm.message;
+    if (campaignForm.image) {
+      finalMessage = JSON.stringify({
+        text: campaignForm.message,
+        image: campaignForm.image
+      });
+    }
+
     try {
+      const payload = {
+        id: editingCampaign ? editingCampaign.id : undefined,
+        name: campaignForm.name,
+        accounts: campaignForm.accounts,
+        targetsText: campaignForm.targetsText,
+        message: finalMessage,
+        delay: campaignForm.delay,
+        randomDelay: campaignForm.randomDelay,
+        loop: campaignForm.loop
+      };
+
       const res = await authenticatedFetch(`${API_BASE}/campaigns`, {
         method: 'POST',
-        body: JSON.stringify({
-          id: editingCampaign ? editingCampaign.id : undefined,
-          ...campaignForm
-        })
+        body: JSON.stringify(payload)
       });
       if (res.ok) {
         closeCampaignModal();
@@ -641,28 +687,31 @@ function App() {
         </div>
       ) : (
         <div className="accounts-grid">
-          {accounts.map(acc => (
-            <div key={acc.phone} className="account-card">
-              <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
-                <div className="account-avatar">
-                  {acc.firstName ? acc.firstName[0].toUpperCase() : 'T'}
+          {accounts.map(acc => {
+            const displayName = acc.name || `${acc.firstName || ''} ${acc.lastName || ''}`.trim() || 'Sem Nome';
+            return (
+              <div key={acc.phone} className="account-card">
+                <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
+                  <div className="account-avatar">
+                    {displayName[0].toUpperCase()}
+                  </div>
+                  <div className="account-details">
+                    <h4>{displayName}</h4>
+                    <p>+{acc.phone}</p>
+                    {acc.username && <p style={{ fontSize: '12px', color: 'var(--color-indigo)' }}>@{acc.username}</p>}
+                    <span className={`account-status-badge ${acc.isOnline ? 'online' : 'offline'}`}>
+                      <span className="status-dot" style={{ width: '6px', height: '6px', boxShadow: 'none' }}></span>
+                      {acc.isOnline ? 'Conectado' : 'Desconectado'}
+                    </span>
+                  </div>
                 </div>
-                <div className="account-details">
-                  <h4>{acc.firstName} {acc.lastName}</h4>
-                  <p>+{acc.phone}</p>
-                  {acc.username && <p style={{ fontSize: '12px', color: 'var(--color-indigo)' }}>@{acc.username}</p>}
-                  <span className={`account-status-badge ${acc.isOnline ? 'online' : 'offline'}`}>
-                    <span className="status-dot" style={{ width: '6px', height: '6px', boxShadow: 'none' }}></span>
-                    {acc.isOnline ? 'Conectado' : 'Desconectado'}
-                  </span>
-                </div>
+                
+                <button className="btn-icon-only" style={{ color: 'var(--color-rose)', borderColor: 'rgba(244,63,94,0.1)' }} onClick={() => deleteAccount(acc.phone)}>
+                  <span className="material-icons-round">logout</span>
+                </button>
               </div>
-              
-              <button className="btn-icon-only" style={{ color: 'var(--color-rose)', borderColor: 'rgba(244,63,94,0.1)' }} onClick={() => deleteAccount(acc.phone)}>
-                <span className="material-icons-round">logout</span>
-              </button>
-            </div>
-          ))}
+            );
+          })}
         </div>
       )}
     </div>
@@ -771,9 +820,29 @@ function App() {
                 </div>
 
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '13px' }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '13px' }}>
                     <span>Mensagem modelo:</span>
-                    <span style={{ color: 'var(--text-muted)' }}>{cmp.message.substring(0, 80)}...</span>
+                    <span style={{ color: 'var(--text-muted)', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                      {(() => {
+                        let text = cmp.message || '';
+                        let hasImage = false;
+                        if (text.startsWith('{') && text.endsWith('}')) {
+                          try {
+                            const parsed = JSON.parse(text);
+                            text = parsed.text || '';
+                            hasImage = !!parsed.image;
+                          } catch (e) {}
+                        }
+                        return (
+                          <>
+                            {hasImage && (
+                              <span className="material-icons-round" style={{ fontSize: '14px', color: 'var(--color-indigo)' }} title="Mensagem com imagem">image</span>
+                            )}
+                            {text.substring(0, 80)}{text.length > 80 ? '...' : ''}
+                          </>
+                        );
+                      })()}
+                    </span>
                   </div>
                   <div className="progress-bar-container">
                     <div className="progress-bar-fill" style={{ width: `${percent}%` }}></div>
@@ -1355,6 +1424,7 @@ function App() {
                 <div style={{ display: 'flex', flexWrap: 'wrap', gap: '10px', marginTop: '6px' }}>
                   {accounts.filter(a => a.isOnline).map(acc => {
                     const isChecked = campaignForm.accounts.includes(acc.phone);
+                    const displayName = acc.name || `${acc.firstName || ''} ${acc.lastName || ''}`.trim() || 'Sem Nome';
                     return (
                       <div key={acc.phone} onClick={() => handleCampaignAccountToggle(acc.phone)} style={{
                         padding: '8px 12px',
@@ -1372,7 +1442,7 @@ function App() {
                         <span className="material-icons-round" style={{ fontSize: '16px', color: isChecked ? 'var(--color-indigo)' : 'var(--text-muted)' }}>
                           {isChecked ? 'check_box' : 'check_box_outline_blank'}
                         </span>
-                        {acc.firstName} (+{acc.phone})
+                        {displayName} (+{acc.phone})
                       </div>
                     );
                   })}
@@ -1534,6 +1604,15 @@ function App() {
                                   {g.username ? `@${g.username}` : g.id}
                                 </div>
                               </div>
+                              {g.restrictsMedia && (
+                                <span 
+                                  className="material-icons-round" 
+                                  style={{ fontSize: '14px', color: 'var(--color-rose)', marginLeft: 'auto' }} 
+                                  title="Este grupo/canal restringe o envio de imagens/mídias para membros!"
+                                >
+                                  no_photography
+                                </span>
+                              )}
                             </div>
                           );
                         })}
@@ -1565,6 +1644,44 @@ function App() {
                       {tag}
                     </span>
                   ))}
+                </div>
+              </div>
+
+              {/* Imagem Opcional */}
+              <div className="form-group" style={{ marginTop: '16px' }}>
+                <label className="form-label" style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                  <span className="material-icons-round" style={{ fontSize: '18px', color: 'var(--color-indigo)' }}>image</span>
+                  Imagem da Mensagem (Opcional)
+                </label>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', marginTop: '6px' }}>
+                  {campaignForm.image && (
+                    <div style={{ position: 'relative', width: 'fit-content' }}>
+                      <img src={campaignForm.image} alt="Preview" style={{ maxWidth: '200px', maxHeight: '150px', borderRadius: '8px', border: '1px solid var(--glass-border)', objectFit: 'contain' }} />
+                      <button type="button" onClick={() => setCampaignForm({ ...campaignForm, image: null })} style={{
+                        position: 'absolute',
+                        top: '-8px',
+                        right: '-8px',
+                        background: 'var(--color-rose)',
+                        color: '#fff',
+                        border: 'none',
+                        borderRadius: '50%',
+                        width: '20px',
+                        height: '20px',
+                        cursor: 'pointer',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        fontSize: '12px',
+                        fontWeight: 'bold',
+                        boxShadow: '0 2px 5px rgba(0,0,0,0.5)'
+                      }}>×</button>
+                    </div>
+                  )}
+                  <input type="file" accept="image/*" onChange={handleImageUpload} style={{ display: 'none' }} id="campaign-image-input" />
+                  <label htmlFor="campaign-image-input" className="btn btn-secondary" style={{ width: 'fit-content', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '6px', padding: '8px 16px', borderRadius: '6px', fontSize: '13px' }}>
+                    <span className="material-icons-round" style={{ fontSize: '16px' }}>photo_library</span>
+                    {campaignForm.image ? 'Alterar Imagem' : 'Adicionar Imagem'}
+                  </label>
                 </div>
               </div>
 

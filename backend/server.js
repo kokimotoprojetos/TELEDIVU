@@ -1392,9 +1392,16 @@ async function processExtractionJob(jobId, client, usersToAdd, targetGroup, dela
     if (job.status !== 'running') break; // Permite cancelar se implementarmos status='cancelled'
 
     try {
+      let userToInvite;
+      try {
+        userToInvite = await client.getInputEntity(user);
+      } catch (resolveErr) {
+        userToInvite = user.username ? user.username : user.id;
+      }
+
       await client.invoke(new Api.channels.InviteToChannel({
         channel: targetGroup,
-        users: [user]
+        users: [userToInvite]
       }));
       job.added++;
       addLog(`Adicionado: ${user.firstName || ''} ${user.lastName || ''}`.trim());

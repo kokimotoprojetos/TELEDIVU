@@ -1263,8 +1263,10 @@ app.post('/api/campaigns/:id/toggle', requireAuth, async (req, res) => {
 // -------------------------------------------------------------
 // ROTAS DE FERRAMENTAS (TOOLS)
 // -------------------------------------------------------------
+const extractionJobs = new Map();
+
 app.post('/api/tools/extract-members', requireAuth, async (req, res) => {
-  const { accountPhone, sourceGroup, targetGroup, limitMessages, minInteractions } = req.body;
+  const { accountPhone, sourceGroup, targetGroup, limitMessages, minInteractions, delay, randomDelay } = req.body;
   
   if (!accountPhone || !sourceGroup || !targetGroup) {
     return res.status(400).json({ error: 'Conta, grupo de origem e grupo de destino são obrigatórios.' });
@@ -1330,60 +1332,86 @@ app.post('/api/tools/extract-members', requireAuth, async (req, res) => {
       return res.json({ 
         success: true, 
         message: 'Nenhum membro novo válido encontrado para adicionar.',
+        jobId: null,
         totalAnalyzed: messages.length,
         activeFound: filteredInteractors.length,
-        alreadyInGroup: alreadyInGroupCount,
-        successfullyAdded: 0,
-        failedToAdd: 0
+        alreadyInGroup: alreadyInGroupCount
       });
     }
 
-    // 4. Adicionar membros ao targetGroup em pequenos lotes (5 por vez)
-    let addedCount = 0;
-    let failedCount = 0;
+    const jobId = uuidv4();
+    const delayMs = (Number(delay) || 60) * 1000;
+    const randomDelayMs = (Number(randomDelay) || 10) * 1000;
 
-    const batchSize = 5;
-    for (let i = 0; i < usersToAdd.length; i += batchSize) {
-      const batch = usersToAdd.slice(i, i + batchSize);
-      try {
-        await client.invoke(new Api.channels.InviteToChannel({
-          channel: targetGroup,
-          users: batch
-        }));
-        addedCount += batch.length;
-      } catch (err) {
-        // Se falhar no lote (ex: um tem privacidade restrita), tenta um a um
-        for (const user of batch) {
-          try {
-            await client.invoke(new Api.channels.InviteToChannel({
-              channel: targetGroup,
-              users: [user]
-            }));
-            addedCount++;
-          } catch (singleErr) {
-            failedCount++;
-          }
-          await new Promise(r => setTimeout(r, 1000)); // Delay para evitar rate limit
-        }
-      }
-      await new Promise(r => setTimeout(r, 2000)); // Delay entre lotes
-    }
-
-    res.json({
-      success: true,
-      message: 'Extração e adição concluídas.',
+    extractionJobs.set(jobId, {
+      status: 'running',
       totalAnalyzed: messages.length,
       activeFound: filteredInteractors.length,
       alreadyInGroup: alreadyInGroupCount,
-      successfullyAdded: addedCount,
-      failedToAdd: failedCount
+      totalToAdd: usersToAdd.length,
+      added: 0,
+      failed: 0,
+      logs: []
+    });
+
+    // Iniciar processo em background
+    processExtractionJob(jobId, client, usersToAdd, targetGroup, delayMs, randomDelayMs);
+
+    res.json({
+      success: true,
+      message: 'Extração e adição iniciadas em segundo plano.',
+      jobId
     });
 
   } catch (err) {
-    console.error('[Extrator] Erro:', err.message);
-    res.status(500).json({ error: `Falha na extração: ${err.message}` });
+    console.error('[Extrator] Erro inicial:', err.message);
+    res.status(500).json({ error: `Falha na inicialização da extração: ${err.message}` });
   }
 });
+
+app.get('/api/tools/extract-members/status/:jobId', requireAuth, (req, res) => {
+  const job = extractionJobs.get(req.params.jobId);
+  if (!job) {
+    return res.status(404).json({ error: 'Job não encontrado ou expirado.' });
+  }
+  res.json(job);
+});
+
+async function processExtractionJob(jobId, client, usersToAdd, targetGroup, delayMs, randomDelayMs) {
+  const job = extractionJobs.get(jobId);
+  if (!job) return;
+
+  const addLog = (msg) => {
+    job.logs.push(`[${new Date().toLocaleTimeString()}] ${msg}`);
+    if (job.logs.length > 50) job.logs.shift(); // Manter apenas últimos 50 logs na memória
+  };
+
+  addLog(`Iniciando adição de ${usersToAdd.length} membros ao grupo.`);
+
+  for (const user of usersToAdd) {
+    if (job.status !== 'running') break; // Permite cancelar se implementarmos status='cancelled'
+
+    try {
+      await client.invoke(new Api.channels.InviteToChannel({
+        channel: targetGroup,
+        users: [user]
+      }));
+      job.added++;
+      addLog(`Adicionado: ${user.firstName || ''} ${user.lastName || ''}`.trim());
+    } catch (err) {
+      job.failed++;
+      addLog(`Falha ao adicionar ID ${user.id}: ${err.message}`);
+    }
+
+    // Calcular delay atual
+    const currentDelay = delayMs + Math.floor(Math.random() * randomDelayMs);
+    addLog(`Aguardando ${Math.round(currentDelay / 1000)} segundos...`);
+    await new Promise(r => setTimeout(r, currentDelay));
+  }
+
+  job.status = 'completed';
+  addLog('Extração finalizada com sucesso.');
+}
 
 // -------------------------------------------------------------
 // ROTAS DE LOGS

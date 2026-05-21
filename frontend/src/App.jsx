@@ -103,12 +103,17 @@ function App() {
     sourceGroup: '',
     targetGroup: '',
     limitMessages: 500,
-    minInteractions: 1
+    minInteractions: 1,
+    delay: 60,
+    randomDelay: 10
   });
   const [extractGroups, setExtractGroups] = useState([]);
   const [extractLoading, setExtractLoading] = useState(false);
   const [extractResult, setExtractResult] = useState(null);
+  const [extractJobId, setExtractJobId] = useState(null);
   const [extractError, setExtractError] = useState(null);
+
+  const extractPollIntervalRef = useRef(null);
 
   const pollIntervalRef = useRef(null);
   const dataPollIntervalRef = useRef(null);
@@ -132,6 +137,27 @@ function App() {
     }
   }, [extractForm.accountPhone]);
 
+  const pollExtractionStatus = async (jobId) => {
+    try {
+      const res = await authenticatedFetch(`${API_BASE}/tools/extract-members/status/${jobId}`);
+      if (res.ok) {
+        const data = await res.json();
+        setExtractResult(data);
+        if (data.status === 'completed' || data.status === 'error') {
+          clearInterval(extractPollIntervalRef.current);
+          setExtractJobId(null);
+        }
+      } else {
+        clearInterval(extractPollIntervalRef.current);
+        setExtractJobId(null);
+      }
+    } catch (err) {
+      console.error(err);
+      clearInterval(extractPollIntervalRef.current);
+      setExtractJobId(null);
+    }
+  };
+
   const handleExtractSubmit = async (e) => {
     e.preventDefault();
     setExtractError(null);
@@ -145,7 +171,15 @@ function App() {
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || 'Erro na extração.');
-      setExtractResult(data);
+      
+      if (data.jobId) {
+        setExtractJobId(data.jobId);
+        extractPollIntervalRef.current = setInterval(() => {
+          pollExtractionStatus(data.jobId);
+        }, 2000);
+      } else {
+        setExtractResult(data);
+      }
     } catch (err) {
       setExtractError(err.message);
     } finally {
@@ -700,9 +734,33 @@ function App() {
             <small>Exigir que o membro tenha enviado pelo menos este número de mensagens para ser considerado ativo.</small>
           </div>
 
+          <div className="form-group">
+            <label>Intervalo Fixo (Segundos)</label>
+            <input
+              type="number"
+              min="1"
+              value={extractForm.delay}
+              onChange={e => setExtractForm({...extractForm, delay: Number(e.target.value)})}
+              required
+            />
+            <small>Tempo exato de espera entre convites.</small>
+          </div>
+
+          <div className="form-group">
+            <label>Variação Humana (Segundos)</label>
+            <input
+              type="number"
+              min="0"
+              value={extractForm.randomDelay}
+              onChange={e => setExtractForm({...extractForm, randomDelay: Number(e.target.value)})}
+              required
+            />
+            <small>Tempo aleatório somado ao intervalo fixo.</small>
+          </div>
+
           <div className="form-actions full-width" style={{ marginTop: '20px' }}>
-            <button type="submit" className="btn-primary" disabled={extractLoading}>
-              {extractLoading ? 'Extraindo e Adicionando...' : 'Iniciar Extração'}
+            <button type="submit" className="btn-primary" disabled={extractLoading || extractJobId}>
+              {extractLoading || extractJobId ? 'Extração em Andamento...' : 'Iniciar Extração'}
             </button>
           </div>
         </form>
@@ -713,16 +771,51 @@ function App() {
           </div>
         )}
 
-        {extractResult && (
+        {extractResult && !extractResult.jobId && extractResult.status === undefined && (
           <div className="success-alert" style={{ marginTop: '20px', backgroundColor: '#2e3b32', borderLeft: '4px solid #4ade80', padding: '16px', borderRadius: '8px' }}>
             <h3 style={{ color: '#4ade80', margin: '0 0 10px 0' }}>✅ {extractResult.message}</h3>
             <ul style={{ margin: 0, paddingLeft: '20px', color: '#e2e8f0' }}>
               <li><strong>Mensagens analisadas:</strong> {extractResult.totalAnalyzed}</li>
               <li><strong>Membros ativos encontrados (não-admins):</strong> {extractResult.activeFound}</li>
               <li><strong>Já estavam no grupo de destino:</strong> {extractResult.alreadyInGroup}</li>
-              <li><strong>Membros adicionados com sucesso:</strong> {extractResult.successfullyAdded}</li>
-              <li><strong>Falhas ao adicionar (ex: privacidade):</strong> {extractResult.failedToAdd}</li>
             </ul>
+          </div>
+        )}
+
+        {(extractJobId || (extractResult && extractResult.status === 'completed')) && extractResult && (
+          <div className="success-alert" style={{ marginTop: '20px', backgroundColor: '#1e293b', borderLeft: '4px solid #3b82f6', padding: '16px', borderRadius: '8px' }}>
+            <h3 style={{ color: '#3b82f6', margin: '0 0 10px 0' }}>
+              {extractResult.status === 'completed' ? '✅ Extração Concluída' : '🔄 Extraindo e Adicionando...'}
+            </h3>
+            
+            <div style={{ marginBottom: '15px' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '5px', fontSize: '14px', color: '#cbd5e1' }}>
+                <span>Progresso: {extractResult.added + extractResult.failed} / {extractResult.totalToAdd}</span>
+                <span>{Math.round(((extractResult.added + extractResult.failed) / (extractResult.totalToAdd || 1)) * 100)}%</span>
+              </div>
+              <div style={{ width: '100%', height: '8px', backgroundColor: '#334155', borderRadius: '4px', overflow: 'hidden' }}>
+                <div style={{ width: `${((extractResult.added + extractResult.failed) / (extractResult.totalToAdd || 1)) * 100}%`, height: '100%', backgroundColor: '#3b82f6', transition: 'width 0.3s ease' }}></div>
+              </div>
+            </div>
+
+            <ul style={{ margin: 0, paddingLeft: '20px', color: '#e2e8f0', marginBottom: '15px' }}>
+              <li><strong>Mensagens analisadas:</strong> {extractResult.totalAnalyzed}</li>
+              <li><strong>Ativos encontrados (alvo):</strong> {extractResult.activeFound}</li>
+              <li><strong>Já estavam no grupo:</strong> {extractResult.alreadyInGroup}</li>
+              <li><strong style={{ color: '#4ade80' }}>Adicionados com sucesso:</strong> {extractResult.added}</li>
+              <li><strong style={{ color: '#ef4444' }}>Falhas (privacidade/erros):</strong> {extractResult.failed}</li>
+            </ul>
+
+            <div style={{ backgroundColor: '#0f172a', padding: '10px', borderRadius: '6px', fontSize: '13px', fontFamily: 'monospace', maxHeight: '150px', overflowY: 'auto', border: '1px solid #334155' }}>
+              <div style={{ color: '#64748b', marginBottom: '5px', borderBottom: '1px solid #334155', paddingBottom: '5px' }}>Logs do Processo</div>
+              {extractResult.logs && extractResult.logs.length > 0 ? (
+                extractResult.logs.map((log, idx) => (
+                  <div key={idx} style={{ color: '#a5b4fc', marginBottom: '2px' }}>{log}</div>
+                ))
+              ) : (
+                <div style={{ color: '#64748b' }}>Aguardando logs...</div>
+              )}
+            </div>
           </div>
         )}
       </div>

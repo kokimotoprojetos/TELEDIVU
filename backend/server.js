@@ -1340,8 +1340,8 @@ app.post('/api/tools/extract-members', requireAuth, async (req, res) => {
     }
 
     const jobId = uuidv4();
-    const delayMs = (Number(delay) || 60) * 1000;
-    const randomDelayMs = (Number(randomDelay) || 10) * 1000;
+    const delayMs = (Number(delay) || 1) * 60 * 1000;
+    const randomDelayMs = (Number(randomDelay) || 0) * 60 * 1000;
 
     extractionJobs.set(jobId, {
       status: 'running',

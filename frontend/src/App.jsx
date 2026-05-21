@@ -104,8 +104,8 @@ function App() {
     targetGroup: '',
     limitMessages: 500,
     minInteractions: 1,
-    delay: 60,
-    randomDelay: 10
+    delay: 1,
+    randomDelay: 1
   });
   const [extractGroups, setExtractGroups] = useState([]);
   const [extractLoading, setExtractLoading] = useState(false);
@@ -735,7 +735,7 @@ function App() {
           </div>
 
           <div className="form-group">
-            <label>Intervalo Fixo (Segundos)</label>
+            <label>Intervalo Fixo (Minutos)</label>
             <input
               type="number"
               min="1"
@@ -743,11 +743,11 @@ function App() {
               onChange={e => setExtractForm({...extractForm, delay: Number(e.target.value)})}
               required
             />
-            <small>Tempo exato de espera entre convites.</small>
+            <small>Tempo exato de espera em minutos entre convites.</small>
           </div>
 
           <div className="form-group">
-            <label>Variação Humana (Segundos)</label>
+            <label>Variação Humana (Minutos)</label>
             <input
               type="number"
               min="0"
@@ -755,7 +755,7 @@ function App() {
               onChange={e => setExtractForm({...extractForm, randomDelay: Number(e.target.value)})}
               required
             />
-            <small>Tempo aleatório somado ao intervalo fixo.</small>
+            <small>Tempo aleatório em minutos somado ao intervalo fixo.</small>
           </div>
 
           <div className="form-actions full-width" style={{ marginTop: '20px' }}>

@@ -102,7 +102,8 @@ function App() {
     accountPhone: '',
     sourceGroup: '',
     targetGroup: '',
-    limitMessages: 500
+    limitMessages: 500,
+    minInteractions: 1
   });
   const [extractGroups, setExtractGroups] = useState([]);
   const [extractLoading, setExtractLoading] = useState(false);
@@ -686,6 +687,19 @@ function App() {
             <small>Lê as mensagens mais recentes para achar quem interagiu.</small>
           </div>
 
+          <div className="form-group">
+            <label>Mínimo de Interações (Ex: 2)</label>
+            <input
+              type="number"
+              min="1"
+              max="100"
+              value={extractForm.minInteractions}
+              onChange={e => setExtractForm({...extractForm, minInteractions: Number(e.target.value)})}
+              required
+            />
+            <small>Exigir que o membro tenha enviado pelo menos este número de mensagens para ser considerado ativo.</small>
+          </div>
+
           <div className="form-actions full-width" style={{ marginTop: '20px' }}>
             <button type="submit" className="btn-primary" disabled={extractLoading}>
               {extractLoading ? 'Extraindo e Adicionando...' : 'Iniciar Extração'}
@@ -705,6 +719,7 @@ function App() {
             <ul style={{ margin: 0, paddingLeft: '20px', color: '#e2e8f0' }}>
               <li><strong>Mensagens analisadas:</strong> {extractResult.totalAnalyzed}</li>
               <li><strong>Membros ativos encontrados (não-admins):</strong> {extractResult.activeFound}</li>
+              <li><strong>Já estavam no grupo de destino:</strong> {extractResult.alreadyInGroup}</li>
               <li><strong>Membros adicionados com sucesso:</strong> {extractResult.successfullyAdded}</li>
               <li><strong>Falhas ao adicionar (ex: privacidade):</strong> {extractResult.failedToAdd}</li>
             </ul>

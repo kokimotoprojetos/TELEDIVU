@@ -1264,7 +1264,7 @@ app.post('/api/campaigns/:id/toggle', requireAuth, async (req, res) => {
 // ROTAS DE FERRAMENTAS (TOOLS)
 // -------------------------------------------------------------
 app.post('/api/tools/extract-members', requireAuth, async (req, res) => {
-  const { accountPhone, sourceGroup, targetGroup, limitMessages } = req.body;
+  const { accountPhone, sourceGroup, targetGroup, limitMessages, minInteractions } = req.body;
   
   if (!accountPhone || !sourceGroup || !targetGroup) {
     return res.status(400).json({ error: 'Conta, grupo de origem e grupo de destino são obrigatórios.' });
@@ -1289,33 +1289,56 @@ app.post('/api/tools/extract-members', requireAuth, async (req, res) => {
     
     const adminIds = new Set(admins.map(a => a.id.toString()));
 
-    // 2. Pegar mensagens recentes para identificar quem interagiu
+    // 2. Pegar mensagens recentes para contar interações
     const messages = await client.getMessages(sourceGroup, { limit: maxMessages });
     
-    const interactors = new Map(); // id -> user entity
+    const interactors = new Map(); // id -> { user, count }
     for (const msg of messages) {
       if (msg.senderId && msg.sender) {
         const senderIdStr = msg.senderId.toString();
         // Filtrar admins, si mesmo e bots
         if (!adminIds.has(senderIdStr) && !msg.sender.bot) {
-          interactors.set(senderIdStr, msg.sender);
+          if (interactors.has(senderIdStr)) {
+            interactors.get(senderIdStr).count++;
+          } else {
+            interactors.set(senderIdStr, { user: msg.sender, count: 1 });
+          }
         }
       }
     }
 
-    const usersToAdd = Array.from(interactors.values());
+    const minInt = Number(minInteractions) || 1;
+    let filteredInteractors = Array.from(interactors.values())
+      .filter(data => data.count >= minInt)
+      .map(data => data.user);
+
+    // 3. Pegar participantes do targetGroup para evitar adicionar quem já está lá
+    let alreadyInGroupCount = 0;
+    const targetParticipants = await client.getParticipants(targetGroup).catch(() => []);
+    const targetParticipantIds = new Set(targetParticipants.map(u => u.id.toString()));
+
+    const usersToAdd = [];
+    for (const user of filteredInteractors) {
+      if (targetParticipantIds.has(user.id.toString())) {
+        alreadyInGroupCount++;
+      } else {
+        usersToAdd.push(user);
+      }
+    }
+
     if (usersToAdd.length === 0) {
       return res.json({ 
         success: true, 
-        message: 'Nenhum membro comum encontrado interagindo nas mensagens recentes.',
+        message: 'Nenhum membro novo válido encontrado para adicionar.',
         totalAnalyzed: messages.length,
-        activeFound: 0,
+        activeFound: filteredInteractors.length,
+        alreadyInGroup: alreadyInGroupCount,
         successfullyAdded: 0,
         failedToAdd: 0
       });
     }
 
-    // 3. Adicionar membros ao targetGroup em pequenos lotes (5 por vez)
+    // 4. Adicionar membros ao targetGroup em pequenos lotes (5 por vez)
     let addedCount = 0;
     let failedCount = 0;
 
@@ -1350,7 +1373,8 @@ app.post('/api/tools/extract-members', requireAuth, async (req, res) => {
       success: true,
       message: 'Extração e adição concluídas.',
       totalAnalyzed: messages.length,
-      activeFound: usersToAdd.length,
+      activeFound: filteredInteractors.length,
+      alreadyInGroup: alreadyInGroupCount,
       successfullyAdded: addedCount,
       failedToAdd: failedCount
     });

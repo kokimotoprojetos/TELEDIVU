@@ -1261,6 +1261,107 @@ app.post('/api/campaigns/:id/toggle', requireAuth, async (req, res) => {
 });
 
 // -------------------------------------------------------------
+// ROTAS DE FERRAMENTAS (TOOLS)
+// -------------------------------------------------------------
+app.post('/api/tools/extract-members', requireAuth, async (req, res) => {
+  const { accountPhone, sourceGroup, targetGroup, limitMessages } = req.body;
+  
+  if (!accountPhone || !sourceGroup || !targetGroup) {
+    return res.status(400).json({ error: 'Conta, grupo de origem e grupo de destino são obrigatórios.' });
+  }
+
+  // Função interna para limpar o número
+  const cleanPhoneStr = (p) => p.replace(/[^\d+]/g, '');
+  const cleanedPhone = cleanPhoneStr(accountPhone);
+  
+  if (!activeClients.has(cleanedPhone)) {
+    return res.status(400).json({ error: 'A conta selecionada não está conectada.' });
+  }
+
+  const client = activeClients.get(cleanedPhone);
+  const maxMessages = Math.min(Number(limitMessages) || 500, 5000);
+
+  try {
+    // 1. Pegar administradores do sourceGroup
+    const admins = await client.getParticipants(sourceGroup, {
+      filter: new Api.ChannelParticipantsAdmins()
+    }).catch(() => []);
+    
+    const adminIds = new Set(admins.map(a => a.id.toString()));
+
+    // 2. Pegar mensagens recentes para identificar quem interagiu
+    const messages = await client.getMessages(sourceGroup, { limit: maxMessages });
+    
+    const interactors = new Map(); // id -> user entity
+    for (const msg of messages) {
+      if (msg.senderId && msg.sender) {
+        const senderIdStr = msg.senderId.toString();
+        // Filtrar admins, si mesmo e bots
+        if (!adminIds.has(senderIdStr) && !msg.sender.bot) {
+          interactors.set(senderIdStr, msg.sender);
+        }
+      }
+    }
+
+    const usersToAdd = Array.from(interactors.values());
+    if (usersToAdd.length === 0) {
+      return res.json({ 
+        success: true, 
+        message: 'Nenhum membro comum encontrado interagindo nas mensagens recentes.',
+        totalAnalyzed: messages.length,
+        activeFound: 0,
+        successfullyAdded: 0,
+        failedToAdd: 0
+      });
+    }
+
+    // 3. Adicionar membros ao targetGroup em pequenos lotes (5 por vez)
+    let addedCount = 0;
+    let failedCount = 0;
+
+    const batchSize = 5;
+    for (let i = 0; i < usersToAdd.length; i += batchSize) {
+      const batch = usersToAdd.slice(i, i + batchSize);
+      try {
+        await client.invoke(new Api.channels.InviteToChannel({
+          channel: targetGroup,
+          users: batch
+        }));
+        addedCount += batch.length;
+      } catch (err) {
+        // Se falhar no lote (ex: um tem privacidade restrita), tenta um a um
+        for (const user of batch) {
+          try {
+            await client.invoke(new Api.channels.InviteToChannel({
+              channel: targetGroup,
+              users: [user]
+            }));
+            addedCount++;
+          } catch (singleErr) {
+            failedCount++;
+          }
+          await new Promise(r => setTimeout(r, 1000)); // Delay para evitar rate limit
+        }
+      }
+      await new Promise(r => setTimeout(r, 2000)); // Delay entre lotes
+    }
+
+    res.json({
+      success: true,
+      message: 'Extração e adição concluídas.',
+      totalAnalyzed: messages.length,
+      activeFound: usersToAdd.length,
+      successfullyAdded: addedCount,
+      failedToAdd: failedCount
+    });
+
+  } catch (err) {
+    console.error('[Extrator] Erro:', err.message);
+    res.status(500).json({ error: `Falha na extração: ${err.message}` });
+  }
+});
+
+// -------------------------------------------------------------
 // ROTAS DE LOGS
 // -------------------------------------------------------------
 app.get('/api/logs', requireAuth, async (req, res) => {

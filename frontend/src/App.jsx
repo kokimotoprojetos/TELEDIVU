@@ -98,8 +98,59 @@ function App() {
     bot: false
   });
 
+  const [extractForm, setExtractForm] = useState({
+    accountPhone: '',
+    sourceGroup: '',
+    targetGroup: '',
+    limitMessages: 500
+  });
+  const [extractGroups, setExtractGroups] = useState([]);
+  const [extractLoading, setExtractLoading] = useState(false);
+  const [extractResult, setExtractResult] = useState(null);
+  const [extractError, setExtractError] = useState(null);
+
   const pollIntervalRef = useRef(null);
   const dataPollIntervalRef = useRef(null);
+
+  useEffect(() => {
+    if (extractForm.accountPhone) {
+      const fetchExtractGroups = async (phone) => {
+        try {
+          const res = await authenticatedFetch(`${API_BASE}/accounts/${phone}/groups`);
+          if (res.ok) {
+            const data = await res.json();
+            setExtractGroups(data);
+          }
+        } catch (err) {
+          console.error(err);
+        }
+      };
+      fetchExtractGroups(extractForm.accountPhone);
+    } else {
+      setExtractGroups([]);
+    }
+  }, [extractForm.accountPhone]);
+
+  const handleExtractSubmit = async (e) => {
+    e.preventDefault();
+    setExtractError(null);
+    setExtractResult(null);
+    setExtractLoading(true);
+
+    try {
+      const res = await authenticatedFetch(`${API_BASE}/tools/extract-members`, {
+        method: 'POST',
+        body: JSON.stringify(extractForm)
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Erro na extração.');
+      setExtractResult(data);
+    } catch (err) {
+      setExtractError(err.message);
+    } finally {
+      setExtractLoading(false);
+    }
+  };
 
   // -------------------------------------------------------------
   // LÓGICA DE AUTENTICAÇÃO (SISTEMA DE LOGIN E REGISTRO)
@@ -559,6 +610,109 @@ function App() {
       }
     }
   };
+
+  // -------------------------------------------------------------
+  // RENDER EXTRACTOR (Extrator de Membros)
+  // -------------------------------------------------------------
+  const renderExtractor = () => (
+    <div className="extractor-view fadeIn">
+      <div className="section-header">
+        <h2>Extrator de Membros</h2>
+        <p>Mova membros ativos de um grupo para o seu (Ignora Admins e Bots).</p>
+      </div>
+
+      <div className="card">
+        <form onSubmit={handleExtractSubmit} className="form-grid">
+          <div className="form-group">
+            <label>Conta a ser usada</label>
+            <select 
+              value={extractForm.accountPhone}
+              onChange={e => setExtractForm({...extractForm, accountPhone: e.target.value})}
+              required
+            >
+              <option value="">Selecione uma conta...</option>
+              {accounts.filter(a => a.status === 'connected').map(acc => (
+                <option key={acc.phone} value={acc.phone}>
+                  {acc.name} (+{acc.phone})
+                </option>
+              ))}
+            </select>
+          </div>
+
+          <div className="form-group">
+            <label>Grupo de Origem (De onde extrair)</label>
+            <select
+              value={extractForm.sourceGroup}
+              onChange={e => setExtractForm({...extractForm, sourceGroup: e.target.value})}
+              required
+              disabled={!extractForm.accountPhone}
+            >
+              <option value="">Selecione um grupo de origem...</option>
+              {extractGroups.map(g => (
+                <option key={`src-${g.id}`} value={g.username ? `@${g.username}` : g.id}>
+                  {g.title} {g.username ? `(@${g.username})` : ''}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          <div className="form-group">
+            <label>Grupo de Destino (Para onde adicionar)</label>
+            <select
+              value={extractForm.targetGroup}
+              onChange={e => setExtractForm({...extractForm, targetGroup: e.target.value})}
+              required
+              disabled={!extractForm.accountPhone}
+            >
+              <option value="">Selecione um grupo de destino...</option>
+              {extractGroups.map(g => (
+                <option key={`tgt-${g.id}`} value={g.username ? `@${g.username}` : g.id}>
+                  {g.title} {g.username ? `(@${g.username})` : ''}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          <div className="form-group">
+            <label>Qtd. de Mensagens a Analisar (Ex: 500)</label>
+            <input
+              type="number"
+              min="10"
+              max="5000"
+              value={extractForm.limitMessages}
+              onChange={e => setExtractForm({...extractForm, limitMessages: Number(e.target.value)})}
+              required
+            />
+            <small>Lê as mensagens mais recentes para achar quem interagiu.</small>
+          </div>
+
+          <div className="form-actions full-width" style={{ marginTop: '20px' }}>
+            <button type="submit" className="btn-primary" disabled={extractLoading}>
+              {extractLoading ? 'Extraindo e Adicionando...' : 'Iniciar Extração'}
+            </button>
+          </div>
+        </form>
+
+        {extractError && (
+          <div className="error-alert" style={{ marginTop: '20px' }}>
+            <strong>Erro:</strong> {extractError}
+          </div>
+        )}
+
+        {extractResult && (
+          <div className="success-alert" style={{ marginTop: '20px', backgroundColor: '#2e3b32', borderLeft: '4px solid #4ade80', padding: '16px', borderRadius: '8px' }}>
+            <h3 style={{ color: '#4ade80', margin: '0 0 10px 0' }}>✅ {extractResult.message}</h3>
+            <ul style={{ margin: 0, paddingLeft: '20px', color: '#e2e8f0' }}>
+              <li><strong>Mensagens analisadas:</strong> {extractResult.totalAnalyzed}</li>
+              <li><strong>Membros ativos encontrados (não-admins):</strong> {extractResult.activeFound}</li>
+              <li><strong>Membros adicionados com sucesso:</strong> {extractResult.successfullyAdded}</li>
+              <li><strong>Falhas ao adicionar (ex: privacidade):</strong> {extractResult.failedToAdd}</li>
+            </ul>
+          </div>
+        )}
+      </div>
+    </div>
+  );
 
   // -------------------------------------------------------------
   // RENDERIZAÇÃO DE SUBVIEWS
@@ -1235,6 +1389,10 @@ function App() {
             <span className="material-icons-round">campaign</span>
             Campanhas
           </div>
+          <div className={`nav-item ${activeTab === 'extractor' ? 'active' : ''}`} onClick={() => setActiveTab('extractor')}>
+            <span className="material-icons-round">group_add</span>
+            Extrator
+          </div>
           <div className={`nav-item ${activeTab === 'logs' ? 'active' : ''}`} onClick={() => setActiveTab('logs')}>
             <span className="material-icons-round">terminal</span>
             Logs de Envio
@@ -1295,6 +1453,7 @@ function App() {
             {activeTab === 'dashboard' && 'Visão Geral do Painel'}
             {activeTab === 'accounts' && 'Gerenciamento de Contas'}
             {activeTab === 'campaigns' && 'Central de Campanhas'}
+            {activeTab === 'extractor' && 'Extrator de Membros'}
             {activeTab === 'logs' && 'Histórico de Logs'}
             {activeTab === 'settings' && 'Parâmetros de Conexão'}
           </h2>
@@ -1315,6 +1474,7 @@ function App() {
           {activeTab === 'dashboard' && renderDashboard()}
           {activeTab === 'accounts' && renderAccounts()}
           {activeTab === 'campaigns' && renderCampaigns()}
+          {activeTab === 'extractor' && renderExtractor()}
           {activeTab === 'logs' && renderLogsTab()}
           {activeTab === 'settings' && renderSettings()}
         </div>

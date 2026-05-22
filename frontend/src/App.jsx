@@ -138,6 +138,7 @@ function App() {
   }, [extractForm.accountPhone]);
 
   const pollExtractionStatus = async (jobId) => {
+    if (document.hidden) return; // Otimização: Evita requisições se a aba estiver em segundo plano
     try {
       const res = await authenticatedFetch(`${API_BASE}/tools/extract-members/status/${jobId}`);
       if (res.ok) {
@@ -231,6 +232,7 @@ function App() {
   // -------------------------------------------------------------
   const fetchData = async () => {
     if (!localStorage.getItem('divuga_token')) return;
+    if (document.hidden) return; // Otimização: Pausa o polling do dashboard se o usuário não estiver olhando a página
     try {
       const [statsRes, accountsRes, campaignsRes, logsRes] = await Promise.all([
         authenticatedFetch(`${API_BASE}/stats`),
@@ -267,16 +269,29 @@ function App() {
   };
 
   useEffect(() => {
+    let handleVisibilityChange;
     if (token) {
       fetchData();
       fetchSettings();
-      // Polling contínuo dos dados do Dashboard a cada 4 segundos
-      dataPollIntervalRef.current = setInterval(fetchData, 4000);
+      // Polling contínuo dos dados do Dashboard a cada 10 segundos (reduz carga em 2.5x)
+      dataPollIntervalRef.current = setInterval(fetchData, 10000);
+
+      // Atualiza os dados imediatamente assim que o usuário retorna para a aba
+      handleVisibilityChange = () => {
+        if (!document.hidden) {
+          fetchData();
+          fetchSettings();
+        }
+      };
+      document.addEventListener('visibilitychange', handleVisibilityChange);
     }
 
     return () => {
       if (dataPollIntervalRef.current) clearInterval(dataPollIntervalRef.current);
       if (pollIntervalRef.current) clearInterval(pollIntervalRef.current);
+      if (handleVisibilityChange) {
+        document.removeEventListener('visibilitychange', handleVisibilityChange);
+      }
     };
   }, [token]);
 
